@@ -1,0 +1,48 @@
+# FastAPI Core
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+
+# Database
+sqlalchemy==2.0.25
+asyncpg==0.29.0
+alembic==1.13.1
+
+# Auth & Security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.0.1
+cryptography>=41.0.0
+
+# Validation & Settings
+pydantic==2.5.3
+pydantic-settings==2.1.0
+email-validator==2.1.0
+
+# PDF Processing
+PyMuPDF>=1.26.0
+
+# Excel Processing
+openpyxl==3.1.2
+xlrd==2.0.1
+
+# Email
+aiosmtplib==3.0.1
+
+# Redis (caching, rate limiting)
+redis==5.0.1
+
+# File handling
+aiofiles==23.2.1
+python-magic==0.4.27
+
+# Utils
+httpx==0.26.0
+Pillow==10.2.0
+
+# Development
+pytest==7.4.4
+pytest-asyncio==0.23.3
+
+
+

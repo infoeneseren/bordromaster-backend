@@ -1,0 +1,26 @@
+# BordroMaster Backend - 1Panel Entegrasyonu
+# PostgreSQL ve Redis 1Panel'den kullanılıyor
+
+services:
+  # FastAPI Backend
+  backend:
+    build: .
+    container_name: bordromaster-backend
+    env_file:
+      - .env
+    environment:
+      # 1Panel PostgreSQL bağlantısı
+      - DATABASE_URL=postgresql+asyncpg://reeder_swWycm:reeder_PHaGtP@1Panel-postgresql-ZB3I:5432/bordromaster
+      # 1Panel Redis bağlantısı (şifresiz)
+      - REDIS_URL=redis://1Panel-redis-i8VK:6379/0
+    volumes:
+      - ./uploads:/app/uploads
+    ports:
+      - "8000:8000"
+    networks:
+      - 1panel-network
+    restart: unless-stopped
+
+networks:
+  1panel-network:
+    external: true
