@@ -46,6 +46,7 @@ class User(Base):
     # İlişkiler
     company = relationship("Company", back_populates="users")
     sent_payslips = relationship("Payslip", back_populates="sent_by_user", foreign_keys="Payslip.sent_by")
+    sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
     
     def __repr__(self):
         return f"<User(id={self.id}, email={self.email}, role={self.role})>"

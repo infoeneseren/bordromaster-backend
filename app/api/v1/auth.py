@@ -20,14 +20,16 @@ from app.core.security import (
     decode_token
 )
 from app.core.redis_service import brute_force_protection, token_blacklist
-from app.models import User, Company, UserRole
+from app.models import User, Company, UserRole, AuditAction
 from app.schemas import (
     LoginRequest, 
     TokenResponse, 
     RefreshTokenRequest,
     UserMeResponse
 )
-from app.api.deps import get_current_user, get_client_ip
+from app.api.deps import get_current_user, get_client_ip, get_user_agent
+from app.services.audit_service import audit_service
+from app.services.session_service import session_service
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -45,8 +47,11 @@ async def login(
     - Brute force koruması (IP ve email bazlı)
     - Hesap kilitleme (5 başarısız deneme sonrası 15 dakika)
     - Güvenlik loglama
+    - Session management
+    - Audit logging
     """
     client_ip = get_client_ip(request)
+    user_agent = get_user_agent(request)
     email = login_request.email
     
     # 1. Brute force kontrolü - IP ve email engellenmiş mi? (Redis)
@@ -68,6 +73,17 @@ async def login(
         await brute_force_protection.record_attempt(client_ip, email, success=False)
         remaining = await brute_force_protection.get_remaining_attempts(client_ip, email)
         
+        # Audit log - başarısız giriş
+        await audit_service.log(
+            db=db,
+            action=AuditAction.LOGIN_FAILED,
+            user_email=email,
+            details={"reason": "user_not_found"},
+            ip_address=client_ip,
+            user_agent=user_agent,
+        )
+        await db.commit()
+        
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"E-posta veya şifre hatalı. Kalan deneme: {remaining}"
@@ -78,6 +94,19 @@ async def login(
         # Başarısız denemeyi kaydet
         await brute_force_protection.record_attempt(client_ip, email, success=False)
         remaining = await brute_force_protection.get_remaining_attempts(client_ip, email)
+        
+        # Audit log - başarısız giriş
+        await audit_service.log(
+            db=db,
+            action=AuditAction.LOGIN_FAILED,
+            user_id=user.id,
+            user_email=email,
+            company_id=user.company_id,
+            details={"reason": "wrong_password"},
+            ip_address=client_ip,
+            user_agent=user_agent,
+        )
+        await db.commit()
         
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -100,6 +129,28 @@ async def login(
     # 7. Refresh token'ı kaydet
     user.refresh_token = tokens.refresh_token
     user.last_login = datetime.utcnow()
+    
+    # 8. Session oluştur
+    await session_service.create_session(
+        db=db,
+        user_id=user.id,
+        company_id=user.company_id,
+        refresh_token=tokens.refresh_token,
+        ip_address=client_ip,
+        user_agent=user_agent,
+    )
+    
+    # 9. Audit log - başarılı giriş
+    await audit_service.log(
+        db=db,
+        action=AuditAction.LOGIN,
+        user_id=user.id,
+        user_email=email,
+        company_id=user.company_id,
+        ip_address=client_ip,
+        user_agent=user_agent,
+    )
+    
     await db.commit()
     
     return TokenResponse(
@@ -111,6 +162,7 @@ async def login(
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh_token(
     request: RefreshTokenRequest,
+    http_request: Request,
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -119,6 +171,7 @@ async def refresh_token(
     Güvenlik Özellikleri:
     - Token blacklist kontrolü (Redis)
     - Refresh token rotation
+    - Session güncelleme
     """
     # Blacklist kontrolü (Redis)
     if await token_blacklist.is_blacklisted(request.refresh_token):
@@ -155,6 +208,12 @@ async def refresh_token(
             detail="Refresh token geçersiz"
         )
     
+    # Session aktivitesini güncelle
+    await session_service.update_activity(
+        db=db,
+        refresh_token=request.refresh_token,
+    )
+    
     # Eski token'ı blacklist'e ekle (Redis)
     decoded = decode_token(request.refresh_token)
     if decoded and "exp" in decoded:
@@ -188,7 +247,12 @@ async def logout(
     Güvenlik Özellikleri:
     - Refresh token'ı geçersiz kılar
     - Token'ı blacklist'e ekler (Redis)
+    - Session'ı sonlandırır
+    - Audit log kaydı
     """
+    client_ip = get_client_ip(request)
+    user_agent = get_user_agent(request)
+    
     # Authorization header'dan token'ı al
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
@@ -203,6 +267,12 @@ async def logout(
     
     # Refresh token'ı da blacklist'e ekle (Redis)
     if current_user.refresh_token:
+        # Session'ı sonlandır
+        await session_service.terminate_session_by_token(
+            db=db,
+            refresh_token=current_user.refresh_token,
+        )
+        
         decoded = decode_token(current_user.refresh_token)
         if decoded and "exp" in decoded:
             await token_blacklist.add(
@@ -212,6 +282,18 @@ async def logout(
     
     # Refresh token'ı veritabanından sil
     current_user.refresh_token = None
+    
+    # Audit log
+    await audit_service.log(
+        db=db,
+        action=AuditAction.LOGOUT,
+        user_id=current_user.id,
+        user_email=current_user.email,
+        company_id=current_user.company_id,
+        ip_address=client_ip,
+        user_agent=user_agent,
+    )
+    
     await db.commit()
     
     return {"message": "Başarıyla çıkış yapıldı"}

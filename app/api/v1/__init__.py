@@ -10,6 +10,8 @@ from .payslips import router as payslips_router
 from .tracking import router as tracking_router
 from .settings import router as settings_router
 from .jobs import router as jobs_router
+from .audit import router as audit_router
+from .sessions import router as sessions_router
 
 api_router = APIRouter()
 
@@ -20,3 +22,5 @@ api_router.include_router(payslips_router)
 api_router.include_router(tracking_router)
 api_router.include_router(settings_router)
 api_router.include_router(jobs_router)
+api_router.include_router(audit_router)
+api_router.include_router(sessions_router)

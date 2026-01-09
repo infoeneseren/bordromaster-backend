@@ -46,3 +46,4 @@ pytest-asyncio==0.23.3
 
 
 
+user-agents==2.2.0

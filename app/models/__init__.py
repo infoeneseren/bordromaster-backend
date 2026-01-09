@@ -10,6 +10,8 @@ from .user import User, UserRole
 from .employee import Employee
 from .payslip import Payslip, PayslipStatus
 from .tracking import TrackingEvent, EventType
+from .audit import AuditLog, AuditAction
+from .session import UserSession
 
 __all__ = [
     "Base",
@@ -20,7 +22,10 @@ __all__ = [
     "Payslip",
     "PayslipStatus",
     "TrackingEvent",
-    "EventType"
+    "EventType",
+    "AuditLog",
+    "AuditAction",
+    "UserSession"
 ]
 
 

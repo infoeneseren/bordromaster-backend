@@ -6,20 +6,22 @@ User API Endpoints
 """
 
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
 from app.core.database import get_db
 from app.core.security import get_password_hash, verify_password
-from app.models import User, UserRole
+from app.core.password_policy import password_policy
+from app.models import User, UserRole, AuditAction
 from app.schemas import (
     UserCreate,
     UserUpdate,
     UserPasswordUpdate,
     UserResponse
 )
-from app.api.deps import get_current_user, get_current_admin_user
+from app.api.deps import get_current_user, get_current_admin_user, get_client_ip, get_user_agent
+from app.services.audit_service import audit_service
 
 router = APIRouter(prefix="/users", tags=["Users"])
 
@@ -190,6 +192,7 @@ async def delete_user(
 @router.post("/change-password")
 async def change_password(
     password_data: UserPasswordUpdate,
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
@@ -201,8 +204,49 @@ async def change_password(
             detail="Mevcut şifre hatalı"
         )
     
+    # Ad ve soyadı full_name'den ayıkla
+    first_name = None
+    last_name = None
+    
+    if current_user.full_name:
+        name_parts = current_user.full_name.strip().split()
+        if len(name_parts) >= 2:
+            first_name = name_parts[0]
+            last_name = name_parts[-1]
+        elif len(name_parts) == 1:
+            first_name = name_parts[0]
+    
+    # Şifreyi kullanıcı bilgileriyle birlikte doğrula
+    is_valid, errors = password_policy.validate(
+        password_data.new_password,
+        email=current_user.email,
+        first_name=first_name,
+        last_name=last_name,
+        full_name=current_user.full_name
+    )
+    
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="; ".join(errors)
+        )
+    
     # Yeni şifreyi kaydet
     current_user.password_hash = get_password_hash(password_data.new_password)
+    
+    # Audit log
+    await audit_service.log(
+        db=db,
+        action=AuditAction.PASSWORD_CHANGE,
+        user_id=current_user.id,
+        user_email=current_user.email,
+        company_id=current_user.company_id,
+        resource_type="user",
+        resource_id=current_user.id,
+        ip_address=get_client_ip(request),
+        user_agent=get_user_agent(request),
+    )
+    
     await db.commit()
     
     return {"message": "Şifre başarıyla değiştirildi"}

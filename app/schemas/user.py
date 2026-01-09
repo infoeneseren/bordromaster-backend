@@ -3,45 +3,11 @@
 Pydantic Schemas - User (Kullanıcı)
 """
 
-import re
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, Field, EmailStr, field_validator
+from pydantic import BaseModel, Field, EmailStr, field_validator, model_validator
 from app.models.user import UserRole
-
-
-def validate_password_strength(password: str) -> str:
-    """
-    Güçlü şifre kontrolü
-    
-    Kurallar:
-    - Minimum 8 karakter
-    - En az 1 büyük harf
-    - En az 1 küçük harf
-    - En az 1 rakam
-    - En az 1 özel karakter
-    """
-    errors = []
-    
-    if len(password) < 8:
-        errors.append("En az 8 karakter olmalı")
-    
-    if not re.search(r'[A-Z]', password):
-        errors.append("En az 1 büyük harf içermeli")
-    
-    if not re.search(r'[a-z]', password):
-        errors.append("En az 1 küçük harf içermeli")
-    
-    if not re.search(r'\d', password):
-        errors.append("En az 1 rakam içermeli")
-    
-    if not re.search(r'[!@#$%^&*(),.?":{}|<>_\-+=\[\]\\\/]', password):
-        errors.append("En az 1 özel karakter içermeli (!@#$%^&*...)")
-    
-    if errors:
-        raise ValueError("; ".join(errors))
-    
-    return password
+from app.core.password_policy import validate_password, password_policy
 
 
 class UserBase(BaseModel):
@@ -52,13 +18,37 @@ class UserBase(BaseModel):
 
 class UserCreate(UserBase):
     """Kullanıcı oluşturma şeması"""
-    password: str = Field(..., min_length=8, max_length=100)
+    password: str = Field(..., min_length=8, max_length=128)
     role: UserRole = UserRole.USER
     
-    @field_validator('password')
-    @classmethod
-    def password_strength(cls, v):
-        return validate_password_strength(v)
+    @model_validator(mode='after')
+    def validate_password_with_user_info(self):
+        """Şifreyi kullanıcı bilgileriyle birlikte doğrula"""
+        # Ad ve soyadı full_name'den ayıkla
+        first_name = None
+        last_name = None
+        
+        if self.full_name:
+            name_parts = self.full_name.strip().split()
+            if len(name_parts) >= 2:
+                first_name = name_parts[0]
+                last_name = name_parts[-1]
+            elif len(name_parts) == 1:
+                first_name = name_parts[0]
+        
+        # Şifreyi doğrula
+        is_valid, errors = password_policy.validate(
+            self.password,
+            email=self.email,
+            first_name=first_name,
+            last_name=last_name,
+            full_name=self.full_name
+        )
+        
+        if not is_valid:
+            raise ValueError("; ".join(errors))
+        
+        return self
 
 
 class UserUpdate(BaseModel):
@@ -72,12 +62,15 @@ class UserUpdate(BaseModel):
 class UserPasswordUpdate(BaseModel):
     """Şifre güncelleme şeması"""
     current_password: str
-    new_password: str = Field(..., min_length=8, max_length=100)
+    new_password: str = Field(..., min_length=8, max_length=128)
+    # Not: Şifre değiştirme sırasında ad/soyad kontrolü API endpoint'inde yapılacak
+    # Çünkü bu schema mevcut kullanıcı bilgilerine erişemiyor
     
     @field_validator('new_password')
     @classmethod
     def password_strength(cls, v):
-        return validate_password_strength(v)
+        # Temel kontroller (ad/soyad kontrolü endpoint'te yapılacak)
+        return validate_password(v)
 
 
 class UserResponse(UserBase):
