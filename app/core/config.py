@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     APP_NAME: str
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = False
+    DEV_MODE: bool = False  # True yapılırsa şifre politikası gevşer
     API_V1_PREFIX: str = "/api/v1"
     
     # ==================== JWT GÜVENLİĞİ ====================

@@ -4,14 +4,20 @@ Password Policy - Şifre Güvenlik Politikası
 - Güçlü şifre kuralları
 - Yaygın şifre kontrolü
 - Kişisel bilgi kontrolü (ad, soyad, email)
+- Development modunda gevşetilmiş kurallar
 """
 
+import os
 import re
 import hashlib
 import logging
 from typing import Tuple, List, Optional
 
 security_logger = logging.getLogger("security")
+
+def is_dev_mode() -> bool:
+    """Development mode kontrolü - Her çağrıda güncel değeri döndürür"""
+    return os.getenv("DEV_MODE", "false").lower() in ("true", "1", "yes")
 
 # En yaygın kullanılan zayıf şifreler listesi (Top 1000'den seçilmiş)
 COMMON_PASSWORDS = {
@@ -124,6 +130,13 @@ class PasswordPolicy:
             (is_valid, error_messages)
         """
         errors = []
+        
+        # Development modunda sadece minimum uzunluk kontrol edilir
+        if is_dev_mode():
+            if len(password) < 4:
+                errors.append("Şifre en az 4 karakter olmalıdır")
+            return (len(errors) == 0, errors)
+        
         password_lower = password.lower()
         
         # Türkçe karakterleri normalize et

@@ -18,7 +18,7 @@ class UserBase(BaseModel):
 
 class UserCreate(UserBase):
     """Kullanıcı oluşturma şeması"""
-    password: str = Field(..., min_length=8, max_length=128)
+    password: str = Field(...)  # min_length kaldırıldı - kendi validasyonumuz kullanılacak
     role: UserRole = UserRole.USER
     
     @model_validator(mode='after')
@@ -62,7 +62,7 @@ class UserUpdate(BaseModel):
 class UserPasswordUpdate(BaseModel):
     """Şifre güncelleme şeması"""
     current_password: str
-    new_password: str = Field(..., min_length=8, max_length=128)
+    new_password: str = Field(...)  # min_length kaldırıldı
     # Not: Şifre değiştirme sırasında ad/soyad kontrolü API endpoint'inde yapılacak
     # Çünkü bu schema mevcut kullanıcı bilgilerine erişemiyor
     
