@@ -51,7 +51,7 @@ dist/
 *.egg-info
 .eggs/
 *.egg
-uploads/
+uploads copy/
 uploads/**/*.pdf
 uploads/**/*.xlsx
 uploads/**/*.xls
