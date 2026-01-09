@@ -701,13 +701,18 @@ async def download_period_report(
             display_name = p.extracted_full_name or "Bilinmeyen"
             display_email = "-"
         
-        # Durum belirleme
-        if p.status == PayslipStatus.SENT:
-            status = "Başarılı"
+        # Durum belirleme - tracking bilgilerine göre detaylı
+        # Öncelik: İndirildi > Okundu > Gönderildi > Başarısız > Bekliyor
+        if downloaded_at:
+            status = "İndirildi"
+        elif opened_at:
+            status = "Okundu"
+        elif p.status == PayslipStatus.SENT:
+            status = "Gönderildi"
         elif p.status == PayslipStatus.NO_EMPLOYEE:
             status = "Çalışan Yok"
         elif p.status == PayslipStatus.FAILED:
-            status = "Hatalı"
+            status = "Başarısız"
         else:
             status = "Bekliyor"
         

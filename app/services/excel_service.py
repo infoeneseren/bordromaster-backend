@@ -274,9 +274,15 @@ class ExcelService:
         # Stiller
         header_font = Font(bold=True, color="FFFFFF", size=11)
         header_fill = PatternFill(start_color="2E7D32", end_color="2E7D32", fill_type="solid")
-        success_fill = PatternFill(start_color="C8E6C9", end_color="C8E6C9", fill_type="solid")
-        error_fill = PatternFill(start_color="FFCDD2", end_color="FFCDD2", fill_type="solid")
-        warning_fill = PatternFill(start_color="FFF9C4", end_color="FFF9C4", fill_type="solid")
+        
+        # Durum renkleri
+        downloaded_fill = PatternFill(start_color="C8E6C9", end_color="C8E6C9", fill_type="solid")  # Yeşil - İndirildi
+        opened_fill = PatternFill(start_color="BBDEFB", end_color="BBDEFB", fill_type="solid")  # Mavi - Okundu
+        sent_fill = PatternFill(start_color="FFF9C4", end_color="FFF9C4", fill_type="solid")  # Sarı - Gönderildi
+        no_employee_fill = PatternFill(start_color="FFE0B2", end_color="FFE0B2", fill_type="solid")  # Turuncu - Çalışan Yok
+        failed_fill = PatternFill(start_color="FFCDD2", end_color="FFCDD2", fill_type="solid")  # Kırmızı - Başarısız
+        pending_fill = PatternFill(start_color="E0E0E0", end_color="E0E0E0", fill_type="solid")  # Gri - Bekliyor
+        
         center_align = Alignment(horizontal="center", vertical="center")
         left_align = Alignment(horizontal="left", vertical="center")
         thin_border = Border(
@@ -320,12 +326,18 @@ class ExcelService:
             status_cell.alignment = center_align
             
             # Durum rengini ayarla
-            if status == "Başarılı":
-                row_fill = success_fill
+            if status == "İndirildi":
+                row_fill = downloaded_fill
+            elif status == "Okundu":
+                row_fill = opened_fill
+            elif status == "Gönderildi":
+                row_fill = sent_fill
             elif status == "Çalışan Yok":
-                row_fill = warning_fill
+                row_fill = no_employee_fill
+            elif status == "Başarısız":
+                row_fill = failed_fill
             else:
-                row_fill = error_fill
+                row_fill = pending_fill
             
             status_cell.fill = row_fill
             
@@ -365,22 +377,45 @@ class ExcelService:
         summary_row = len(results) + 3
         
         total = len(results)
-        success = sum(1 for r in results if r.get("status") == "Başarılı")
+        downloaded_count = sum(1 for r in results if r.get("status") == "İndirildi")
+        opened_count = sum(1 for r in results if r.get("status") == "Okundu")
+        sent_count = sum(1 for r in results if r.get("status") == "Gönderildi")
         no_employee = sum(1 for r in results if r.get("status") == "Çalışan Yok")
-        failed = total - success - no_employee
-        opened_count = sum(1 for r in results if r.get("opened_at"))
-        downloaded_count = sum(1 for r in results if r.get("downloaded_at"))
+        failed = sum(1 for r in results if r.get("status") == "Başarısız")
+        pending = sum(1 for r in results if r.get("status") == "Bekliyor")
         
-        ws.cell(row=summary_row, column=1, value="ÖZET").font = Font(bold=True)
-        ws.cell(row=summary_row + 1, column=1, value=f"Toplam: {total}")
-        ws.cell(row=summary_row + 2, column=1, value=f"Başarılı: {success}").fill = success_fill
-        ws.cell(row=summary_row + 3, column=1, value=f"Çalışan Yok: {no_employee}").fill = warning_fill
-        ws.cell(row=summary_row + 4, column=1, value=f"Hatalı: {failed}").fill = error_fill
-        ws.cell(row=summary_row + 5, column=1, value=f"Okunan: {opened_count}")
-        ws.cell(row=summary_row + 6, column=1, value=f"İndirilen: {downloaded_count}")
+        # Toplam okunan ve indirilen (her durumda)
+        total_opened = sum(1 for r in results if r.get("opened_at"))
+        total_downloaded = sum(1 for r in results if r.get("downloaded_at"))
+        
+        ws.cell(row=summary_row, column=1, value="ÖZET").font = Font(bold=True, size=12)
+        ws.cell(row=summary_row + 1, column=1, value=f"Toplam Kayıt: {total}").font = Font(bold=True)
+        ws.cell(row=summary_row + 2, column=1, value="")
+        
+        ws.cell(row=summary_row + 3, column=1, value="DURUM DAĞILIMI:").font = Font(bold=True)
+        ws.cell(row=summary_row + 4, column=1, value=f"İndirildi: {downloaded_count}").fill = downloaded_fill
+        ws.cell(row=summary_row + 5, column=1, value=f"Okundu: {opened_count}").fill = opened_fill
+        ws.cell(row=summary_row + 6, column=1, value=f"Gönderildi: {sent_count}").fill = sent_fill
+        ws.cell(row=summary_row + 7, column=1, value=f"Çalışan Yok: {no_employee}").fill = no_employee_fill
+        ws.cell(row=summary_row + 8, column=1, value=f"Başarısız: {failed}").fill = failed_fill
+        ws.cell(row=summary_row + 9, column=1, value=f"Bekliyor: {pending}").fill = pending_fill
+        
+        ws.cell(row=summary_row + 11, column=1, value="İSTATİSTİKLER:").font = Font(bold=True)
+        
+        # Açılma ve indirme oranları hesapla
+        sent_total = total - no_employee - pending  # Gönderilen toplam
+        open_rate = round((total_opened / sent_total * 100), 1) if sent_total > 0 else 0
+        download_rate = round((total_downloaded / sent_total * 100), 1) if sent_total > 0 else 0
+        
+        ws.cell(row=summary_row + 12, column=1, value=f"Gönderilen Toplam: {sent_total}")
+        ws.cell(row=summary_row + 13, column=1, value=f"Açılan Toplam: {total_opened} (%{open_rate})")
+        ws.cell(row=summary_row + 14, column=1, value=f"İndirilen Toplam: {total_downloaded} (%{download_rate})")
         
         # Rapor oluşturma tarihi
-        ws.cell(row=summary_row + 8, column=1, value=f"Rapor Tarihi: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+        ws.cell(row=summary_row + 16, column=1, value=f"Rapor Tarihi: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+        
+        # Sütun A genişliğini özet için ayarla
+        ws.column_dimensions['A'].width = max(column_widths[0], 35)
         
         # BytesIO'ya kaydet
         output = BytesIO()
