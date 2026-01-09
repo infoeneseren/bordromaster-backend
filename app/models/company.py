@@ -3,8 +3,8 @@
 SQLAlchemy Models - Company (Şirket)
 """
 
-from datetime import datetime
-from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, LargeBinary
+from datetime import datetime, timezone
+from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, LargeBinary, func
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
@@ -52,8 +52,8 @@ class Company(Base):
     
     # Durum
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
     
     # İlişkiler
     users = relationship("User", back_populates="company", lazy="selectin")

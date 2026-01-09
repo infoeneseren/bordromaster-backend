@@ -9,11 +9,11 @@ import os
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Body
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_, delete
+from sqlalchemy import select, func, or_, delete, update
 import math
 
 from app.core.database import get_db
-from app.models import User, Employee, Payslip, TrackingEvent
+from app.models import User, Employee, Payslip, TrackingEvent, PayslipStatus
 from app.schemas import (
     EmployeeCreate,
     EmployeeUpdate,
@@ -129,6 +129,22 @@ async def create_employee(
     )
     
     db.add(new_employee)
+    await db.flush()  # ID almak için flush
+    
+    # Bu TC'ye sahip eşleşmemiş bordroları bul ve eşleştir
+    matched_count = await db.execute(
+        update(Payslip)
+        .where(
+            Payslip.tc_no == employee_data.tc_no,
+            Payslip.company_id == current_user.company_id,
+            Payslip.employee_id == None
+        )
+        .values(
+            employee_id=new_employee.id,
+            status=PayslipStatus.PENDING
+        )
+    )
+    
     await db.commit()
     await db.refresh(new_employee)
     
@@ -216,10 +232,40 @@ async def update_employee(
             detail="Çalışan bulunamadı"
         )
     
+    # Eski TC'yi kaydet (eğer değişirse bordro eşleştirmesi için)
+    old_tc = employee.tc_no
+    
     # Güncelle
     update_data = employee_data.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(employee, field, value)
+    
+    # TC değiştiyse bordro eşleştirmesini güncelle
+    new_tc = employee.tc_no
+    if old_tc != new_tc:
+        # Eski TC'li bordroların eşleştirmesini kaldır
+        await db.execute(
+            update(Payslip)
+            .where(
+                Payslip.employee_id == employee.id,
+                Payslip.tc_no == old_tc
+            )
+            .values(employee_id=None)
+        )
+        
+        # Yeni TC'li eşleşmemiş bordroları bu çalışana eşleştir
+        await db.execute(
+            update(Payslip)
+            .where(
+                Payslip.tc_no == new_tc,
+                Payslip.company_id == current_user.company_id,
+                Payslip.employee_id == None
+            )
+            .values(
+                employee_id=employee.id,
+                status=PayslipStatus.PENDING
+            )
+        )
     
     await db.commit()
     await db.refresh(employee)
@@ -279,6 +325,8 @@ async def import_employees(
     
     # Çalışanları ekle
     success_count = 0
+    new_employees = []  # Yeni eklenen çalışanları tutacağız
+    
     for emp_data in employees_data:
         if emp_data["tc_no"] in existing_tcs:
             errors.append(f"TC {emp_data['tc_no'][-4:]}****: Zaten kayıtlı")
@@ -294,8 +342,27 @@ async def import_employees(
             is_active=True
         )
         db.add(new_employee)
+        new_employees.append(new_employee)
         existing_tcs.add(emp_data["tc_no"])
         success_count += 1
+    
+    # Flush yaparak ID'leri al
+    await db.flush()
+    
+    # Her yeni çalışan için bordro eşleştirmesi yap
+    for emp in new_employees:
+        await db.execute(
+            update(Payslip)
+            .where(
+                Payslip.tc_no == emp.tc_no,
+                Payslip.company_id == current_user.company_id,
+                Payslip.employee_id == None
+            )
+            .values(
+                employee_id=emp.id,
+                status=PayslipStatus.PENDING
+            )
+        )
     
     await db.commit()
     
@@ -481,4 +548,51 @@ async def delete_employee(
     }
 
 
+@router.post("/match-payslips")
+async def match_payslips_to_employees(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Tüm eşleşmemiş bordroları mevcut çalışanlarla TC numarasına göre eşleştir.
+    Bu endpoint mevcut çalışanlar için eşleşmemiş bordroları otomatik eşleştirir.
+    """
+    # Şirkete ait tüm çalışanları al
+    emp_result = await db.execute(
+        select(Employee).where(Employee.company_id == current_user.company_id)
+    )
+    employees = emp_result.scalars().all()
+    
+    total_matched = 0
+    matched_details = []
+    
+    for emp in employees:
+        # Bu TC'ye sahip eşleşmemiş bordroları bul ve eşleştir
+        result = await db.execute(
+            update(Payslip)
+            .where(
+                Payslip.tc_no == emp.tc_no,
+                Payslip.company_id == current_user.company_id,
+                Payslip.employee_id == None
+            )
+            .values(
+                employee_id=emp.id,
+                status=PayslipStatus.PENDING
+            )
+        )
+        if result.rowcount > 0:
+            matched_details.append({
+                "employee_name": f"{emp.first_name} {emp.last_name}",
+                "tc_masked": emp.tc_masked,
+                "matched_count": result.rowcount
+            })
+            total_matched += result.rowcount
+    
+    await db.commit()
+    
+    return {
+        "message": f"{total_matched} bordro eşleştirildi",
+        "total_matched": total_matched,
+        "details": matched_details
+    }
 

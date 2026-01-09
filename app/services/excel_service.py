@@ -258,7 +258,10 @@ class ExcelService:
                     "period": str,
                     "status": str,  # "Başarılı", "Hatalı", "Çalışan Yok"
                     "error": str veya None,
-                    "sent_at": datetime veya None
+                    "sent_at": datetime veya None,
+                    "opened_at": datetime veya None,
+                    "downloaded_at": datetime veya None,
+                    "download_count": int
                 }
                 
         Returns:
@@ -284,7 +287,7 @@ class ExcelService:
         )
         
         # Başlıklar
-        headers = ["Sıra", "Ad Soyad", "TC (Son 4)", "E-Posta", "Dönem", "Durum", "Hata Açıklaması", "Gönderim Zamanı"]
+        headers = ["Sıra", "Ad Soyad", "TC (Son 4)", "E-Posta", "Dönem", "Durum", "Gönderim", "Okunma", "İndirme", "İndirme Sayısı", "Hata Açıklaması"]
         for col, header in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col, value=header)
             cell.font = header_font
@@ -326,21 +329,35 @@ class ExcelService:
             
             status_cell.fill = row_fill
             
-            # Hata açıklaması
-            ws.cell(row=row_idx, column=7, value=result.get("error", "-")).alignment = left_align
-            
             # Gönderim zamanı
             sent_at = result.get("sent_at")
             sent_str = sent_at.strftime("%d.%m.%Y %H:%M") if sent_at else "-"
-            ws.cell(row=row_idx, column=8, value=sent_str).alignment = center_align
+            ws.cell(row=row_idx, column=7, value=sent_str).alignment = center_align
+            
+            # Okunma zamanı
+            opened_at = result.get("opened_at")
+            opened_str = opened_at.strftime("%d.%m.%Y %H:%M") if opened_at else "-"
+            ws.cell(row=row_idx, column=8, value=opened_str).alignment = center_align
+            
+            # İndirme zamanı
+            downloaded_at = result.get("downloaded_at")
+            downloaded_str = downloaded_at.strftime("%d.%m.%Y %H:%M") if downloaded_at else "-"
+            ws.cell(row=row_idx, column=9, value=downloaded_str).alignment = center_align
+            
+            # İndirme sayısı
+            download_count = result.get("download_count", 0)
+            ws.cell(row=row_idx, column=10, value=download_count).alignment = center_align
+            
+            # Hata açıklaması
+            ws.cell(row=row_idx, column=11, value=result.get("error") or "-").alignment = left_align
             
             # Border uygula
-            for col in range(1, 9):
+            for col in range(1, 12):
                 cell = ws.cell(row=row_idx, column=col)
                 cell.border = thin_border
         
         # Sütun genişlikleri
-        column_widths = [8, 25, 15, 35, 15, 15, 40, 20]
+        column_widths = [8, 25, 12, 35, 15, 15, 18, 18, 18, 15, 40]
         for col, width in enumerate(column_widths, 1):
             ws.column_dimensions[openpyxl.utils.get_column_letter(col)].width = width
         
@@ -351,15 +368,19 @@ class ExcelService:
         success = sum(1 for r in results if r.get("status") == "Başarılı")
         no_employee = sum(1 for r in results if r.get("status") == "Çalışan Yok")
         failed = total - success - no_employee
+        opened_count = sum(1 for r in results if r.get("opened_at"))
+        downloaded_count = sum(1 for r in results if r.get("downloaded_at"))
         
         ws.cell(row=summary_row, column=1, value="ÖZET").font = Font(bold=True)
         ws.cell(row=summary_row + 1, column=1, value=f"Toplam: {total}")
         ws.cell(row=summary_row + 2, column=1, value=f"Başarılı: {success}").fill = success_fill
         ws.cell(row=summary_row + 3, column=1, value=f"Çalışan Yok: {no_employee}").fill = warning_fill
         ws.cell(row=summary_row + 4, column=1, value=f"Hatalı: {failed}").fill = error_fill
+        ws.cell(row=summary_row + 5, column=1, value=f"Okunan: {opened_count}")
+        ws.cell(row=summary_row + 6, column=1, value=f"İndirilen: {downloaded_count}")
         
         # Rapor oluşturma tarihi
-        ws.cell(row=summary_row + 6, column=1, value=f"Rapor Tarihi: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+        ws.cell(row=summary_row + 8, column=1, value=f"Rapor Tarihi: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
         
         # BytesIO'ya kaydet
         output = BytesIO()

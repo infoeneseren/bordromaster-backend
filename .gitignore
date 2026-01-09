@@ -1,0 +1,70 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environments & secrets
+.env*
+.env.*
+.env.example
+
+# Virtual environment
+venv/
+ENV/
+env/
+.venv/
+
+# Pyright, mypy type checking
+.mypy_cache/
+.pyright/
+.pyre/
+
+# Logs
+*.log
+
+# IDEs and editors
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# macOS
+.DS_Store
+
+# Database/SQL artifacts (if generated locally)
+*.sqlite3
+*.db
+
+# Coverage reports
+.coverage
+htmlcov/
+coverage.xml
+*.cover
+
+# Test cache
+.pytest_cache/
+
+# Static & build artifacts
+build/
+dist/
+*.egg-info
+.eggs/
+*.egg
+uploads/
+uploads/**/*.pdf
+uploads/**/*.xlsx
+uploads/**/*.xls
+uploads/**/*.jpg
+uploads/**/*.jpeg
+uploads/**/*.png
+uploads/**/*.svg
+uploads/**/*.webp
+uploads/**/*.log
+
+# Misc
+*.bak
+*.swp
+# Docker
+docker-compose.override.yml
+

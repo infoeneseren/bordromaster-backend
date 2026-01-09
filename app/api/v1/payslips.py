@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete, or_
+from sqlalchemy.orm import selectinload
 import math
 import aiofiles
 
@@ -26,12 +27,16 @@ from app.schemas import (
     PayslipUploadResponse,
     PayslipSendRequest,
     PayslipBulkSendResponse,
-    PayslipSendResult
+    PayslipSendResult,
+    JobStartResponse,
+    JobStatusResponse,
+    JobResultItem
 )
 from app.api.deps import get_current_user
-from app.services import PDFService, MailService
+from app.services import PDFService, MailService, job_service, JobStatus
 from app.services.excel_service import ExcelService
 from app.core.security_utils import sanitize_search_input
+from app.core.security import generate_signed_download_url
 
 router = APIRouter(prefix="/payslips", tags=["Payslips"])
 
@@ -119,6 +124,9 @@ async def list_payslips(
         # TC maskeleme
         tc_masked = f"****{p.tc_no[-4:]}" if p.tc_no and len(p.tc_no) >= 4 else p.tc_no
         
+        # İmzalı download URL oluştur
+        download_url = generate_signed_download_url(settings.TRACKING_BASE_URL, p.tracking_id)
+        
         items.append(PayslipResponse(
             id=p.id,
             employee_id=p.employee_id,
@@ -128,6 +136,7 @@ async def list_payslips(
             period_label=p.period_label,
             status=p.status,
             tracking_id=p.tracking_id,
+            download_url=download_url,
             sent_at=p.sent_at,
             send_error=p.send_error,
             created_at=p.created_at,
@@ -267,7 +276,7 @@ async def send_payslips(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Bordrolari mail ile gonder"""
+    """Bordrolari mail ile gonder - Optimize edilmiş versiyon"""
     # Sirket bilgilerini al
     company_result = await db.execute(
         select(Company).where(Company.id == current_user.company_id)
@@ -280,9 +289,11 @@ async def send_payslips(
     if not company.smtp_server or not company.smtp_username or not company.smtp_password:
         raise HTTPException(status_code=400, detail="SMTP ayarlari yapilanmamis")
     
-    # Bordrolari al
+    # Bordrolari ve çalışanları tek sorguda al (N+1 sorgu problemi çözümü)
     payslips_result = await db.execute(
-        select(Payslip).where(
+        select(Payslip).options(
+            selectinload(Payslip.employee)
+        ).where(
             Payslip.id.in_(request.payslip_ids),
             Payslip.company_id == current_user.company_id
         )
@@ -331,104 +342,96 @@ async def send_payslips(
     success_count = 0
     error_count = 0
     
-    for payslip in payslips:
-        # Önce çalışan kontrolü yap
-        if not payslip.employee_id:
-            # Çalışan eşleşmesi yok
-            display_name = payslip.extracted_full_name or "Bilinmeyen"
+    try:
+        for payslip in payslips:
+            # Çalışan zaten yüklendi (selectinload ile)
+            employee = payslip.employee
             
-            results.append(PayslipSendResult(
-                payslip_id=payslip.id,
-                employee_email="",
-                success=False,
-                error=f"Calisan eslesmesi yok ({display_name} - TC: ****{payslip.tc_no[-4:] if payslip.tc_no else '????'})"
-            ))
-            error_count += 1
-            continue
-        
-        # Calisan bilgilerini al
-        emp_result = await db.execute(
-            select(Employee).where(Employee.id == payslip.employee_id)
-        )
-        employee = emp_result.scalar_one_or_none()
-        
-        if not employee:
-            results.append(PayslipSendResult(
-                payslip_id=payslip.id,
-                employee_email="",
-                success=False,
-                error="Calisan bulunamadi"
-            ))
-            error_count += 1
-            continue
-        
-        # Pasif çalışanları atla
-        if not employee.is_active:
+            # Önce çalışan kontrolü yap
+            if not payslip.employee_id or not employee:
+                # Çalışan eşleşmesi yok
+                display_name = payslip.extracted_full_name or "Bilinmeyen"
+                
+                results.append(PayslipSendResult(
+                    payslip_id=payslip.id,
+                    employee_email="",
+                    success=False,
+                    error=f"Calisan eslesmesi yok ({display_name} - TC: ****{payslip.tc_no[-4:] if payslip.tc_no else '????'})"
+                ))
+                error_count += 1
+                continue
+            
+            # Pasif çalışanları atla
+            if not employee.is_active:
+                results.append(PayslipSendResult(
+                    payslip_id=payslip.id,
+                    employee_email=employee.email,
+                    success=False,
+                    error="Calisan pasif durumda"
+                ))
+                error_count += 1
+                continue
+            
+            # Email kontrolü
+            if not employee.email:
+                results.append(PayslipSendResult(
+                    payslip_id=payslip.id,
+                    employee_email="",
+                    success=False,
+                    error="Calisanin email adresi yok"
+                ))
+                error_count += 1
+                continue
+            
+            # PDF dosya adini olustur (TC olmadan)
+            pdf_filename = f"Bordro_{employee.first_name}_{employee.last_name}_{payslip.period}.pdf"
+            
+            # Mail gonder
+            success, message = await mail_service.send_payslip_email(
+                to_email=employee.email,
+                employee_name=employee.full_name,
+                period=payslip.period_label or payslip.period,
+                pdf_path=payslip.pdf_path,
+                pdf_filename=pdf_filename,
+                tracking_id=payslip.tracking_id,
+                subject_template=company.mail_subject,
+                body_template=company.mail_body
+            )
+            
+            if success:
+                payslip.status = PayslipStatus.SENT
+                payslip.sent_at = datetime.utcnow()
+                payslip.sent_by = current_user.id
+                payslip.send_error = None
+                
+                # Tracking event ekle
+                event = TrackingEvent(
+                    payslip_id=payslip.id,
+                    event_type=EventType.EMAIL_SENT
+                )
+                db.add(event)
+                
+                success_count += 1
+            else:
+                payslip.status = PayslipStatus.FAILED
+                payslip.send_error = message
+                error_count += 1
+            
             results.append(PayslipSendResult(
                 payslip_id=payslip.id,
                 employee_email=employee.email,
-                success=False,
-                error="Calisan pasif durumda"
+                success=success,
+                error=None if success else message
             ))
-            error_count += 1
-            continue
-        
-        # Email kontrolü
-        if not employee.email:
-            results.append(PayslipSendResult(
-                payslip_id=payslip.id,
-                employee_email="",
-                success=False,
-                error="Calisanin email adresi yok"
-            ))
-            error_count += 1
-            continue
-        
-        # PDF dosya adini olustur (TC olmadan)
-        pdf_filename = f"Bordro_{employee.first_name}_{employee.last_name}_{payslip.period}.pdf"
-        
-        # Mail gonder
-        success, message = await mail_service.send_payslip_email(
-            to_email=employee.email,
-            employee_name=employee.full_name,
-            period=payslip.period_label or payslip.period,
-            pdf_path=payslip.pdf_path,
-            pdf_filename=pdf_filename,
-            tracking_id=payslip.tracking_id,
-            subject_template=company.mail_subject,
-            body_template=company.mail_body
-        )
-        
-        if success:
-            payslip.status = PayslipStatus.SENT
-            payslip.sent_at = datetime.utcnow()
-            payslip.sent_by = current_user.id
-            payslip.send_error = None
             
-            # Tracking event ekle
-            event = TrackingEvent(
-                payslip_id=payslip.id,
-                event_type=EventType.EMAIL_SENT
-            )
-            db.add(event)
-            
-            success_count += 1
-        else:
-            payslip.status = PayslipStatus.FAILED
-            payslip.send_error = message
-            error_count += 1
+            # Bekleme süresi - sadece çoklu gönderimde uygula (spam koruması)
+            if len(payslips) > 1 and company.mail_delay_seconds > 0:
+                await asyncio.sleep(company.mail_delay_seconds)
         
-        results.append(PayslipSendResult(
-            payslip_id=payslip.id,
-            employee_email=employee.email,
-            success=success,
-            error=None if success else message
-        ))
-        
-        # Bekleme suresi
-        await asyncio.sleep(company.mail_delay_seconds)
-    
-    await db.commit()
+        await db.commit()
+    finally:
+        # SMTP bağlantısını kapat
+        await mail_service.close_connection()
     
     return PayslipBulkSendResponse(
         total=len(payslips),
@@ -679,6 +682,17 @@ async def download_period_report(
             emp_result = await db.execute(select(Employee).where(Employee.id == p.employee_id))
             emp = emp_result.scalar_one_or_none()
         
+        # Tracking olayları
+        events_result = await db.execute(
+            select(TrackingEvent).where(TrackingEvent.payslip_id == p.id)
+        )
+        events = events_result.scalars().all()
+        
+        # Okunma ve indirme bilgileri
+        opened_at = next((e.created_at for e in events if e.event_type == EventType.EMAIL_OPENED), None)
+        downloaded_at = next((e.created_at for e in events if e.event_type == EventType.PDF_DOWNLOADED), None)
+        download_count = sum(1 for e in events if e.event_type == EventType.PDF_DOWNLOADED)
+        
         # İsim belirleme
         if emp:
             display_name = emp.full_name
@@ -704,7 +718,10 @@ async def download_period_report(
             "period": p.period_label or p.period,
             "status": status,
             "error": p.send_error,
-            "sent_at": p.sent_at
+            "sent_at": p.sent_at,
+            "opened_at": opened_at,
+            "downloaded_at": downloaded_at,
+            "download_count": download_count
         })
     
     # Excel oluştur
@@ -844,7 +861,7 @@ async def send_payslips_with_report(
         
         if success:
             payslip.status = PayslipStatus.SENT
-            payslip.sent_at = datetime.utcnow()
+            payslip.sent_at = datetime.now(timezone.utc)
             payslip.sent_by = current_user.id
             payslip.send_error = None
             

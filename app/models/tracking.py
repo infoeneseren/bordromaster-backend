@@ -3,8 +3,8 @@
 SQLAlchemy Models - TrackingEvent (Takip Olayları)
 """
 
-from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Enum
+from datetime import datetime, timezone
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Enum, func
 from sqlalchemy.orm import relationship
 import enum
 from app.core.database import Base
@@ -36,7 +36,7 @@ class TrackingEvent(Base):
     extra_data = Column(Text, nullable=True)  # JSON formatında ek veri
     
     # Zaman
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=func.now())
     
     # İlişkiler
     payslip = relationship("Payslip", back_populates="tracking_events")

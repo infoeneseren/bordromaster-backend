@@ -3,8 +3,8 @@
 SQLAlchemy Models - User (Kullanıcı)
 """
 
-from datetime import datetime
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Enum
+from datetime import datetime, timezone
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Enum, func
 from sqlalchemy.orm import relationship
 import enum
 from app.core.database import Base
@@ -40,8 +40,8 @@ class User(Base):
     
     # Zaman damgaları
     last_login = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
     
     # İlişkiler
     company = relationship("Company", back_populates="users")

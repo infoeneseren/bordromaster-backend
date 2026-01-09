@@ -33,7 +33,8 @@ security_logger = logging.getLogger("security")
 router = APIRouter(prefix="/tracking", tags=["Tracking"])
 
 # Rate limiting için basit in-memory storage (Production'da Redis kullanın)
-download_attempts = defaultdict(list)  # IP -> [timestamp listesi]
+download_attempts_by_ip = defaultdict(list)  # IP -> [timestamp listesi]
+download_attempts_by_tracking = defaultdict(list)  # tracking_id -> [timestamp listesi]
 
 # 1x1 seffaf PNG (base64)
 TRANSPARENT_PIXEL = base64.b64decode(
@@ -41,30 +42,49 @@ TRANSPARENT_PIXEL = base64.b64decode(
 )
 
 
-def check_rate_limit(ip: str) -> bool:
+def check_rate_limit(ip: str, tracking_id: str) -> tuple[bool, str]:
     """
     Rate limiting kontrolü
     
+    Kurallar:
+    - IP başına dakikada maksimum DOWNLOAD_IP_LIMIT_PER_MINUTE istek
+    - Tracking ID başına günde (24 saat) maksimum DOWNLOAD_TRACKING_LIMIT_PER_DAY istek (IP farketmeksizin)
+    
     Returns:
-        True = izin verildi, False = rate limit aşıldı
+        tuple[bool, str]: (izin verildi mi, hata mesajı)
     """
     current_time = time.time()
     minute_ago = current_time - 60
-    hour_ago = current_time - 3600
+    day_ago = current_time - 86400  # 24 saat
     
-    # Eski kayıtları temizle
-    download_attempts[ip] = [t for t in download_attempts[ip] if t > hour_ago]
+    # Limitler settings'den
+    ip_limit = settings.DOWNLOAD_IP_LIMIT_PER_MINUTE
+    tracking_limit = settings.DOWNLOAD_TRACKING_LIMIT_PER_DAY
     
-    # Son 1 dakikadaki istek sayısı
-    recent_minute = sum(1 for t in download_attempts[ip] if t > minute_ago)
-    if recent_minute >= settings.DOWNLOAD_RATE_LIMIT_PER_MINUTE:
-        return False
+    # 1. IP bazlı kontrol - Eski kayıtları temizle
+    download_attempts_by_ip[ip] = [t for t in download_attempts_by_ip[ip] if t > minute_ago]
     
-    # Son 1 saatteki istek sayısı
-    if len(download_attempts[ip]) >= settings.DOWNLOAD_RATE_LIMIT_PER_HOUR:
-        return False
+    # Son 1 dakikadaki IP başına istek sayısı
+    if len(download_attempts_by_ip[ip]) >= ip_limit:
+        return False, f"IP başına dakikada maksimum {ip_limit} istek hakkınız var. Lütfen bekleyin."
     
-    return True
+    # 2. Tracking ID bazlı kontrol - Eski kayıtları temizle
+    download_attempts_by_tracking[tracking_id] = [
+        t for t in download_attempts_by_tracking[tracking_id] if t > day_ago
+    ]
+    
+    # Son 24 saatteki tracking_id başına istek sayısı
+    if len(download_attempts_by_tracking[tracking_id]) >= tracking_limit:
+        return False, f"Bu bordro için günlük indirme limiti ({tracking_limit}) aşıldı. 24 saat sonra tekrar deneyin."
+    
+    return True, ""
+
+
+def record_download_attempt(ip: str, tracking_id: str):
+    """İndirme denemesini kaydet"""
+    current_time = time.time()
+    download_attempts_by_ip[ip].append(current_time)
+    download_attempts_by_tracking[tracking_id].append(current_time)
 
 
 def log_security_event(event_type: str, ip: str, tracking_id: str, details: str = ""):
@@ -163,17 +183,15 @@ async def track_download(
         log_security_event("INVALID_TRACKING_ID", client_ip, tracking_id, "Download endpoint")
         raise HTTPException(status_code=400, detail="Geçersiz indirme linki")
     
-    # 1. Rate Limiting Kontrolü
-    if not check_rate_limit(client_ip):
-        log_security_event("RATE_LIMIT_EXCEEDED", client_ip, tracking_id, f"UA: {user_agent}")
+    # 1. Rate Limiting Kontrolü (IP ve Tracking ID bazlı)
+    rate_limit_ok, rate_limit_msg = check_rate_limit(client_ip, tracking_id)
+    if not rate_limit_ok:
+        log_security_event("RATE_LIMIT_EXCEEDED", client_ip, tracking_id, f"UA: {user_agent} | {rate_limit_msg}")
         raise HTTPException(
             status_code=429, 
-            detail="Çok fazla istek. Lütfen bir süre bekleyin.",
+            detail=rate_limit_msg,
             headers={"Retry-After": "60"}
         )
-    
-    # Rate limit için kayıt ekle
-    download_attempts[client_ip].append(time.time())
     
     # 2. İmza Doğrulaması (ZORUNLU)
     if not verify_download_signature(tracking_id, t, s):
@@ -224,7 +242,10 @@ async def track_download(
     
     await db.commit()
     
-    # 7. Calisan bilgisini al
+    # 7. Rate limit kaydı ekle (başarılı indirme sonrası)
+    record_download_attempt(client_ip, tracking_id)
+    
+    # 8. Calisan bilgisini al
     emp_result = await db.execute(
         select(Employee).where(Employee.id == payslip.employee_id)
     )

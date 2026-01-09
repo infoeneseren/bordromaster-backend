@@ -3,8 +3,8 @@
 SQLAlchemy Models - Payslip (Bordro)
 """
 
-from datetime import datetime
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, Enum
+from datetime import datetime, timezone
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, Enum, func
 from sqlalchemy.orm import relationship
 import enum
 from app.core.database import Base
@@ -61,8 +61,8 @@ class Payslip(Base):
     send_error = Column(Text, nullable=True)
     
     # Zaman damgaları
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
     
     # İlişkiler
     company = relationship("Company", back_populates="payslips")

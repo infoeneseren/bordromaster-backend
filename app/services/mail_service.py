@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Mail Service
-- SMTP bağlantı
+- SMTP bağlantı (connection pooling ile optimize)
 - Mail gönderim
 - Tracking entegrasyonu
 - Modern HTML şablon
@@ -20,10 +20,11 @@ from typing import Optional, Dict, List
 from datetime import datetime
 
 from app.core.config import settings
+from app.core.security import generate_signed_download_url
 
 
 class MailService:
-    """Mail gönderim servisi"""
+    """Mail gönderim servisi - Connection pooling ile optimize edilmiş"""
     
     def __init__(
         self,
@@ -66,6 +67,56 @@ class MailService:
         self.disclaimer_text = disclaimer_text
         self.show_logo = show_logo
         self.logo_width = logo_width
+        # Connection pooling için
+        self._smtp_connection: Optional[aiosmtplib.SMTP] = None
+        self._is_connected = False
+    
+    async def _ensure_connection(self) -> aiosmtplib.SMTP:
+        """SMTP bağlantısını sağla - varsa kullan, yoksa oluştur"""
+        if self._smtp_connection and self._is_connected:
+            try:
+                # Bağlantı hala aktif mi kontrol et (NOOP komutu ile)
+                await self._smtp_connection.noop()
+                return self._smtp_connection
+            except Exception:
+                # Bağlantı kopmuş, yeniden bağlan
+                self._is_connected = False
+                self._smtp_connection = None
+        
+        # Yeni bağlantı oluştur
+        if self.use_tls:
+            # Port 587 - STARTTLS kullan
+            self._smtp_connection = aiosmtplib.SMTP(
+                hostname=self.smtp_server,
+                port=self.smtp_port,
+                timeout=30
+            )
+            await self._smtp_connection.connect()
+            await self._smtp_connection.starttls()
+        else:
+            # Port 465 - SSL/TLS kullan (Yandex, Gmail vb.)
+            self._smtp_connection = aiosmtplib.SMTP(
+                hostname=self.smtp_server,
+                port=self.smtp_port,
+                timeout=30,
+                use_tls=True
+            )
+            await self._smtp_connection.connect()
+        
+        await self._smtp_connection.login(self.smtp_username, self.smtp_password)
+        self._is_connected = True
+        return self._smtp_connection
+    
+    async def close_connection(self):
+        """SMTP bağlantısını kapat"""
+        if self._smtp_connection and self._is_connected:
+            try:
+                await self._smtp_connection.quit()
+            except Exception:
+                pass
+            finally:
+                self._is_connected = False
+                self._smtp_connection = None
     
     async def test_connection(self) -> tuple[bool, str]:
         """SMTP bağlantısını test et"""
@@ -113,7 +164,7 @@ class MailService:
         body_template: str
     ) -> tuple[bool, str]:
         """
-        Bordro maili gönder
+        Bordro maili gönder - Connection pooling ile optimize edilmiş
         
         Args:
             to_email: Alıcı email
@@ -128,6 +179,7 @@ class MailService:
         Returns:
             tuple[bool, str]: (başarılı mı, mesaj)
         """
+        smtp = None
         try:
             # Şablon değişkenlerini değiştir
             subject = subject_template.replace("{name}", employee_name).replace("{period}", period)
@@ -135,7 +187,8 @@ class MailService:
             # Tracking URL'leri oluştur - önce instance değişkenine bak, yoksa config'den al
             tracking_base = self.tracking_base_url or settings.TRACKING_BASE_URL
             open_tracking_url = f"{tracking_base}/api/v1/tracking/pixel/{tracking_id}"
-            download_url = f"{tracking_base}/api/v1/tracking/download/{tracking_id}"
+            # İmzalı download URL oluştur (güvenlik için zorunlu)
+            download_url = generate_signed_download_url(tracking_base, tracking_id)
             
             # HTML içerik oluştur
             html_body = self._create_html_body(
@@ -176,33 +229,25 @@ class MailService:
                 )
                 msg.attach(pdf_attachment)
             
-            # Gönder
-            if self.use_tls:
-                # Port 587 - STARTTLS kullan
-                smtp = aiosmtplib.SMTP(
-                    hostname=self.smtp_server,
-                    port=self.smtp_port,
-                    timeout=30
-                )
-                await smtp.connect()
-                await smtp.starttls()
-            else:
-                # Port 465 - SSL/TLS kullan (Yandex, Gmail vb.)
-                smtp = aiosmtplib.SMTP(
-                    hostname=self.smtp_server,
-                    port=self.smtp_port,
-                    timeout=30,
-                    use_tls=True  # SSL bağlantı
-                )
-                await smtp.connect()
+            # Connection pooling kullan
+            smtp = await self._ensure_connection()
             
-            await smtp.login(self.smtp_username, self.smtp_password)
+            # Mail gönder
             await smtp.sendmail(self.smtp_username, to_email, msg.as_string())
-            await smtp.quit()
             
             return True, "Mail başarıyla gönderildi"
             
+        except aiosmtplib.SMTPException as e:
+            # SMTP hatası - bağlantıyı sıfırla
+            self._is_connected = False
+            self._smtp_connection = None
+            return False, f"SMTP hatası: {str(e)}"
+        except FileNotFoundError:
+            return False, f"PDF dosyası bulunamadı: {pdf_path}"
         except Exception as e:
+            # Genel hata - bağlantıyı sıfırla
+            self._is_connected = False
+            self._smtp_connection = None
             return False, f"Mail gönderilemedi: {str(e)}"
     
     def _create_html_body(

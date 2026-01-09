@@ -12,9 +12,13 @@ services:
       # 1Panel PostgreSQL bağlantısı
       - DATABASE_URL=postgresql+asyncpg://reeder_swWycm:reeder_PHaGtP@1Panel-postgresql-ZB3I:5432/bordromaster
       # 1Panel Redis bağlantısı (şifresiz)
-      - REDIS_URL=redis://1Panel-redis-i8VK:6379/0
+      - REDIS_URL=redis://:redis_3QAAkz@1Panel-redis-i8VK:6379/0
+      # Timezone ayarı
+      - TZ=Europe/Istanbul
     volumes:
       - ./uploads:/app/uploads
+      - ./app:/app/app:ro
+      - /etc/localtime:/etc/localtime:ro
     ports:
       - "8000:8000"
     networks:

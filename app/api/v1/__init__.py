@@ -9,6 +9,7 @@ from .employees import router as employees_router
 from .payslips import router as payslips_router
 from .tracking import router as tracking_router
 from .settings import router as settings_router
+from .jobs import router as jobs_router
 
 api_router = APIRouter()
 
@@ -18,3 +19,4 @@ api_router.include_router(employees_router)
 api_router.include_router(payslips_router)
 api_router.include_router(tracking_router)
 api_router.include_router(settings_router)
+api_router.include_router(jobs_router)

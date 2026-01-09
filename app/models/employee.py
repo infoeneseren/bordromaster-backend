@@ -3,8 +3,8 @@
 SQLAlchemy Models - Employee (Çalışan)
 """
 
-from datetime import datetime
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
+from datetime import datetime, timezone
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, func
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
@@ -31,8 +31,8 @@ class Employee(Base):
     is_active = Column(Boolean, default=True)
     
     # Zaman damgaları
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
     
     # İlişkiler
     company = relationship("Company", back_populates="employees")

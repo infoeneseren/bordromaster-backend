@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     DOWNLOAD_RATE_LIMIT_PER_MINUTE: int = 10
     DOWNLOAD_RATE_LIMIT_PER_HOUR: int = 50
     
+    # İndirme limitleri (yeni)
+    DOWNLOAD_IP_LIMIT_PER_MINUTE: int = 3  # IP başına dakikada maksimum istek
+    DOWNLOAD_TRACKING_LIMIT_PER_DAY: int = 6  # Tracking ID başına günde maksimum istek
+    
     # ==================== BRUTE FORCE KORUMASI ====================
     LOGIN_MAX_ATTEMPTS: int = 5
     LOGIN_LOCKOUT_MINUTES: int = 15

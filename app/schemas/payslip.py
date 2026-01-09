@@ -31,6 +31,7 @@ class PayslipResponse(BaseModel):
     period_label: Optional[str] = None
     status: PayslipStatus
     tracking_id: str
+    download_url: Optional[str] = None  # İmzalı indirme URL'i
     sent_at: Optional[datetime] = None
     send_error: Optional[str] = None
     created_at: datetime

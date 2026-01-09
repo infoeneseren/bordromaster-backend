@@ -61,6 +61,13 @@ from .tracking import (
     TrackingReportResponse
 )
 
+from .job import (
+    JobStatus,
+    JobStartResponse,
+    JobResultItem,
+    JobStatusResponse
+)
+
 __all__ = [
     # Auth
     "LoginRequest",
@@ -107,7 +114,12 @@ __all__ = [
     "TrackingEventResponse",
     "TrackingStatsResponse",
     "PayslipTrackingResponse",
-    "TrackingReportResponse"
+    "TrackingReportResponse",
+    # Job
+    "JobStatus",
+    "JobStartResponse",
+    "JobResultItem",
+    "JobStatusResponse"
 ]
 
 
