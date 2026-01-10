@@ -425,8 +425,11 @@ async def send_payslips(
             ))
             
             # Bekleme süresi - sadece çoklu gönderimde uygula (spam koruması)
-            if len(payslips) > 1 and company.mail_delay_seconds > 0:
-                await asyncio.sleep(company.mail_delay_seconds)
+            if len(payslips) > 1:
+                # Önce şirket ayarı, yoksa ENV'den al
+                delay = company.mail_delay_seconds if company.mail_delay_seconds > 0 else settings.MAIL_DELAY_SECONDS
+                if delay > 0:
+                    await asyncio.sleep(delay)
         
         await db.commit()
     finally:
@@ -889,7 +892,10 @@ async def send_payslips_with_report(
             error=None if success else message
         ))
         
-        await asyncio.sleep(company.mail_delay_seconds)
+        # Bekleme süresi - Önce şirket ayarı, yoksa ENV'den al
+        delay = company.mail_delay_seconds if company.mail_delay_seconds > 0 else settings.MAIL_DELAY_SECONDS
+        if delay > 0:
+            await asyncio.sleep(delay)
     
     await db.commit()
     

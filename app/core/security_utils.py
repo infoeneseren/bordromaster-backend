@@ -33,6 +33,7 @@ def sanitize_path(path: str, base_dir: str) -> Optional[str]:
         - C:\\Windows\\System32
     """
     if not path or not base_dir:
+        security_logger.warning(f"PATH_SANITIZATION_ERROR | Empty path or base_dir | path={path} | base_dir={base_dir}")
         return None
     
     try:
@@ -44,15 +45,41 @@ def sanitize_path(path: str, base_dir: str) -> Optional[str]:
         abs_path = os.path.abspath(normalized_path)
         abs_base = os.path.abspath(normalized_base)
         
-        # Path, base dizinin içinde mi kontrol et
-        common_path = os.path.commonpath([abs_path, abs_base])
+        # Debug log
+        security_logger.debug(
+            f"PATH_SANITIZE | input={path} | normalized={normalized_path} | "
+            f"abs_path={abs_path} | abs_base={abs_base}"
+        )
         
-        if common_path != abs_base:
-            security_logger.warning(
-                f"PATH_TRAVERSAL_ATTEMPT | Path: {path} | Base: {base_dir} | "
-                f"Resolved: {abs_path}"
-            )
-            return None
+        # Path traversal karakterleri kontrolü
+        dangerous_patterns = ['..', '~', '\x00']
+        for pattern in dangerous_patterns:
+            if pattern in path:
+                security_logger.warning(
+                    f"PATH_TRAVERSAL_PATTERN | Path: {path} | Pattern: {pattern}"
+                )
+                return None
+        
+        # Path, base dizinin içinde mi kontrol et
+        # Hem commonpath hem de startswith kontrolü yap
+        try:
+            common_path = os.path.commonpath([abs_path, abs_base])
+            if common_path != abs_base:
+                # Ek kontrol: path base_dir ile başlıyor mu?
+                if not abs_path.startswith(abs_base + os.sep) and abs_path != abs_base:
+                    security_logger.warning(
+                        f"PATH_TRAVERSAL_ATTEMPT | Path: {path} | Base: {base_dir} | "
+                        f"Resolved: {abs_path} | Common: {common_path}"
+                    )
+                    return None
+        except ValueError:
+            # Farklı drive'larda (Windows) commonpath ValueError fırlatır
+            if not abs_path.startswith(abs_base):
+                security_logger.warning(
+                    f"PATH_TRAVERSAL_ATTEMPT | Path: {path} | Base: {base_dir} | "
+                    f"Resolved: {abs_path} | Different drives"
+                )
+                return None
         
         return abs_path
         
@@ -65,26 +92,133 @@ def sanitize_path(path: str, base_dir: str) -> Optional[str]:
 
 def validate_tracking_id(tracking_id: str) -> bool:
     """
-    Tracking ID formatını doğrula
+    Tracking ID formatını detaylı doğrula (Mükemmel güvenlik)
     
     Beklenen format: URL-safe base64, 64 karakter
+    
+    Kontroller:
+    1. Boşluk ve whitespace kontrolü
+    2. Uzunluk kontrolü (64 karakter)
+    3. Sadece URL-safe karakterler (a-z, A-Z, 0-9, -, _)
+    4. Null byte injection kontrolü
+    5. Unicode karakter kontrolü
+    6. Ardışık karakter pattern kontrolü
+    
+    Returns:
+        bool: Geçerli mi
     """
     if not tracking_id:
+        security_logger.warning("TRACKING_ID_VALIDATION | Empty tracking_id")
         return False
     
-    # Uzunluk kontrolü
+    # 1. Tip kontrolü
+    if not isinstance(tracking_id, str):
+        security_logger.warning(f"TRACKING_ID_VALIDATION | Invalid type: {type(tracking_id)}")
+        return False
+    
+    # 2. Whitespace ve kontrol karakteri kontrolü
+    if tracking_id != tracking_id.strip():
+        security_logger.warning("TRACKING_ID_VALIDATION | Contains leading/trailing whitespace")
+        return False
+    
+    if any(c.isspace() for c in tracking_id):
+        security_logger.warning("TRACKING_ID_VALIDATION | Contains whitespace")
+        return False
+    
+    # 3. Null byte injection kontrolü
+    if '\x00' in tracking_id or '\0' in tracking_id:
+        security_logger.warning("TRACKING_ID_VALIDATION | Null byte injection attempt")
+        return False
+    
+    # 4. Uzunluk kontrolü (64 karakter bekleniyor)
     if len(tracking_id) < 32 or len(tracking_id) > 128:
+        security_logger.warning(f"TRACKING_ID_VALIDATION | Invalid length: {len(tracking_id)}")
         return False
     
-    # Sadece URL-safe karakterler (base64 URL-safe)
+    # 5. Sadece URL-safe base64 karakterleri (a-z, A-Z, 0-9, -, _)
     pattern = r'^[A-Za-z0-9_-]+$'
     if not re.match(pattern, tracking_id):
         security_logger.warning(
-            f"INVALID_TRACKING_ID_FORMAT | ID: {tracking_id[:20]}..."
+            f"TRACKING_ID_VALIDATION | Invalid characters in: {tracking_id[:20]}..."
+        )
+        return False
+    
+    # 6. Unicode karakter kontrolü (ASCII dışı karakter olmamalı)
+    try:
+        tracking_id.encode('ascii')
+    except UnicodeEncodeError:
+        security_logger.warning("TRACKING_ID_VALIDATION | Contains non-ASCII characters")
+        return False
+    
+    # 7. Ardışık aynı karakter pattern kontrolü (dddddddddd gibi şüpheli pattern)
+    # 8'den fazla ardışık aynı karakter varsa reddet
+    for i in range(len(tracking_id) - 7):
+        if len(set(tracking_id[i:i+8])) == 1:
+            security_logger.warning("TRACKING_ID_VALIDATION | Suspicious repetitive pattern")
+            return False
+    
+    # 8. Bilinen saldırı pattern'leri kontrolü
+    suspicious_patterns = [
+        '../', '..\\', '%2e%2e', '%252e',  # Path traversal
+        '<script', 'javascript:', 'data:',  # XSS
+        "' OR ", '" OR ', 'DROP TABLE',  # SQL injection
+        '${', '#{', '{{',  # Template injection
+    ]
+    
+    tracking_lower = tracking_id.lower()
+    for pattern in suspicious_patterns:
+        if pattern.lower() in tracking_lower:
+            security_logger.warning(
+                f"TRACKING_ID_VALIDATION | Suspicious pattern detected: {pattern}"
+            )
+            return False
+    
+    # 9. Entropy kontrolü (çok düşük entropy şüpheli)
+    # Basit entropy hesabı: benzersiz karakter oranı
+    unique_ratio = len(set(tracking_id)) / len(tracking_id)
+    if unique_ratio < 0.3:  # %30'dan az benzersiz karakter
+        security_logger.warning(
+            f"TRACKING_ID_VALIDATION | Low entropy: {unique_ratio:.2f}"
         )
         return False
     
     return True
+
+
+def validate_tracking_id_strict(tracking_id: str, expected_length: int = 64) -> tuple[bool, str]:
+    """
+    Tracking ID'yi katı kurallarla doğrula ve hata mesajı döndür
+    
+    Args:
+        tracking_id: Doğrulanacak ID
+        expected_length: Beklenen uzunluk (varsayılan 64)
+    
+    Returns:
+        tuple[bool, str]: (Geçerli mi, Hata mesajı)
+    """
+    if not tracking_id:
+        return False, "Tracking ID boş olamaz"
+    
+    if not isinstance(tracking_id, str):
+        return False, "Tracking ID string olmalıdır"
+    
+    # Whitespace kontrolü
+    if tracking_id != tracking_id.strip():
+        return False, "Tracking ID boşluk içeremez"
+    
+    # Uzunluk kontrolü
+    if len(tracking_id) != expected_length:
+        return False, f"Tracking ID {expected_length} karakter olmalıdır"
+    
+    # Karakter seti kontrolü
+    if not re.match(r'^[A-Za-z0-9_-]+$', tracking_id):
+        return False, "Tracking ID sadece alfanumerik karakterler, - ve _ içerebilir"
+    
+    # Temel doğrulamayı çalıştır
+    if not validate_tracking_id(tracking_id):
+        return False, "Tracking ID güvenlik kontrollerinden geçemedi"
+    
+    return True, ""
 
 
 def sanitize_filename(filename: str) -> str:

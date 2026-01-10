@@ -161,10 +161,12 @@ class MailService:
         pdf_filename: str,
         tracking_id: str,
         subject_template: str,
-        body_template: str
+        body_template: str,
+        max_retries: int = None,
+        retry_delay: int = None
     ) -> tuple[bool, str]:
         """
-        Bordro maili gönder - Connection pooling ile optimize edilmiş
+        Bordro maili gönder - Connection pooling ve retry mekanizması ile
         
         Args:
             to_email: Alıcı email
@@ -175,80 +177,119 @@ class MailService:
             tracking_id: Tracking ID
             subject_template: Konu şablonu
             body_template: İçerik şablonu
+            max_retries: Maksimum tekrar deneme sayısı (None ise env'den alınır)
+            retry_delay: Tekrar denemeler arası bekleme saniye (None ise env'den alınır)
             
         Returns:
             tuple[bool, str]: (başarılı mı, mesaj)
         """
+        import asyncio
+        
+        # ENV'den varsayılan değerleri al
+        if max_retries is None:
+            max_retries = settings.MAIL_RETRY_MAX_ATTEMPTS
+        if retry_delay is None:
+            retry_delay = settings.MAIL_RETRY_BASE_DELAY
+        
         smtp = None
-        try:
-            # Şablon değişkenlerini değiştir
-            subject = subject_template.replace("{name}", employee_name).replace("{period}", period)
-            
-            # Tracking URL'leri oluştur - önce instance değişkenine bak, yoksa config'den al
-            tracking_base = self.tracking_base_url or settings.TRACKING_BASE_URL
-            open_tracking_url = f"{tracking_base}/api/v1/tracking/pixel/{tracking_id}"
-            # İmzalı download URL oluştur (güvenlik için zorunlu)
-            download_url = generate_signed_download_url(tracking_base, tracking_id)
-            
-            # HTML içerik oluştur
-            html_body = self._create_html_body(
-                body_template, 
-                employee_name, 
-                period, 
-                download_url,
-                open_tracking_url
-            )
-            
-            # Mail oluştur
-            msg = MIMEMultipart("alternative")
-            
-            # Gönderici
-            if self.sender_name:
-                msg['From'] = formataddr((str(Header(self.sender_name, 'utf-8')), self.smtp_username))
-            else:
-                msg['From'] = self.smtp_username
-            
-            msg['To'] = to_email
-            msg['Subject'] = subject
-            
-            # Plain text versiyon
-            plain_body = body_template.replace("{name}", employee_name).replace("{period}", period)
-            plain_body += f"\n\nBordronuzu indirmek için: {download_url}"
-            msg.attach(MIMEText(plain_body, 'plain', 'utf-8'))
-            
-            # HTML versiyon
-            msg.attach(MIMEText(html_body, 'html', 'utf-8'))
-            
-            # PDF eki
-            with open(pdf_path, 'rb') as f:
-                pdf_attachment = MIMEApplication(f.read(), _subtype='pdf')
-                pdf_attachment.add_header(
-                    'Content-Disposition',
-                    'attachment',
-                    filename=pdf_filename
+        last_error = ""
+        
+        for attempt in range(max_retries + 1):
+            try:
+                # Şablon değişkenlerini değiştir
+                subject = subject_template.replace("{name}", employee_name).replace("{period}", period)
+                
+                # Tracking URL'leri oluştur - önce instance değişkenine bak, yoksa config'den al
+                tracking_base = self.tracking_base_url or settings.TRACKING_BASE_URL
+                open_tracking_url = f"{tracking_base}/api/v1/tracking/pixel/{tracking_id}"
+                # İmzalı download URL oluştur (güvenlik için zorunlu)
+                download_url = generate_signed_download_url(tracking_base, tracking_id)
+                
+                # HTML içerik oluştur
+                html_body = self._create_html_body(
+                    body_template, 
+                    employee_name, 
+                    period, 
+                    download_url,
+                    open_tracking_url
                 )
-                msg.attach(pdf_attachment)
-            
-            # Connection pooling kullan
-            smtp = await self._ensure_connection()
-            
-            # Mail gönder
-            await smtp.sendmail(self.smtp_username, to_email, msg.as_string())
-            
-            return True, "Mail başarıyla gönderildi"
-            
-        except aiosmtplib.SMTPException as e:
-            # SMTP hatası - bağlantıyı sıfırla
-            self._is_connected = False
-            self._smtp_connection = None
-            return False, f"SMTP hatası: {str(e)}"
-        except FileNotFoundError:
-            return False, f"PDF dosyası bulunamadı: {pdf_path}"
-        except Exception as e:
-            # Genel hata - bağlantıyı sıfırla
-            self._is_connected = False
-            self._smtp_connection = None
-            return False, f"Mail gönderilemedi: {str(e)}"
+                
+                # Mail oluştur
+                msg = MIMEMultipart("alternative")
+                
+                # Gönderici
+                if self.sender_name:
+                    msg['From'] = formataddr((str(Header(self.sender_name, 'utf-8')), self.smtp_username))
+                else:
+                    msg['From'] = self.smtp_username
+                
+                msg['To'] = to_email
+                msg['Subject'] = subject
+                
+                # Plain text versiyon
+                plain_body = body_template.replace("{name}", employee_name).replace("{period}", period)
+                plain_body += f"\n\nBordronuzu indirmek için: {download_url}"
+                msg.attach(MIMEText(plain_body, 'plain', 'utf-8'))
+                
+                # HTML versiyon
+                msg.attach(MIMEText(html_body, 'html', 'utf-8'))
+                
+                # PDF eki
+                with open(pdf_path, 'rb') as f:
+                    pdf_attachment = MIMEApplication(f.read(), _subtype='pdf')
+                    pdf_attachment.add_header(
+                        'Content-Disposition',
+                        'attachment',
+                        filename=pdf_filename
+                    )
+                    msg.attach(pdf_attachment)
+                
+                # Connection pooling kullan
+                smtp = await self._ensure_connection()
+                
+                # Mail gönder
+                await smtp.sendmail(self.smtp_username, to_email, msg.as_string())
+                
+                return True, "Mail başarıyla gönderildi"
+                
+            except aiosmtplib.SMTPException as e:
+                error_str = str(e)
+                last_error = f"SMTP hatası: {error_str}"
+                
+                # SMTP bağlantısını sıfırla
+                self._is_connected = False
+                self._smtp_connection = None
+                
+                # Rate limit hatası kontrolü (450, 451, 452 kodları)
+                is_rate_limit = any(code in error_str for code in ['450', '451', '452', 'Too many', 'rate limit', 'try again'])
+                
+                if is_rate_limit and attempt < max_retries:
+                    # Rate limit - bekle ve tekrar dene
+                    wait_time = retry_delay * (attempt + 1)  # Her denemede daha uzun bekle
+                    import logging
+                    logging.getLogger("mail").warning(
+                        f"SMTP rate limit - {to_email} için {wait_time} saniye bekleniyor... (Deneme {attempt + 1}/{max_retries})"
+                    )
+                    await asyncio.sleep(wait_time)
+                    continue
+                else:
+                    return False, last_error
+                    
+            except FileNotFoundError:
+                return False, f"PDF dosyası bulunamadı: {pdf_path}"
+            except Exception as e:
+                # Genel hata - bağlantıyı sıfırla
+                self._is_connected = False
+                self._smtp_connection = None
+                last_error = f"Mail gönderilemedi: {str(e)}"
+                
+                # Tekrar deneme yapılacak mı?
+                if attempt < max_retries:
+                    await asyncio.sleep(retry_delay)
+                    continue
+                return False, last_error
+        
+        return False, last_error
     
     def _create_html_body(
         self,

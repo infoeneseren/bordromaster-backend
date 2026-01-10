@@ -78,20 +78,32 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     
     IP bazlı istek hız sınırlaması yapar.
     Redis varsa Redis kullanır, yoksa memory tabanlı çalışır.
+    Upload endpoint'leri için ayrı (daha yüksek) limit uygulanır.
     """
+    
+    # Upload endpoint'leri - daha yüksek rate limit uygulanacak
+    UPLOAD_ENDPOINTS = [
+        "/api/v1/payslips/upload",
+        "/api/v1/employees/import",
+        "/api/v1/settings/logo",
+    ]
     
     def __init__(
         self,
         app: ASGIApp,
         requests_per_minute: int = 60,
-        requests_per_hour: int = 1000
+        requests_per_hour: int = 1000,
+        upload_requests_per_minute: int = 200  # Upload için yüksek limit
     ):
         super().__init__(app)
         self.requests_per_minute = requests_per_minute
         self.requests_per_hour = requests_per_hour
+        self.upload_requests_per_minute = upload_requests_per_minute
         # Memory tabanlı storage (Redis yoksa)
         self.minute_requests: Dict[str, list] = defaultdict(list)
         self.hour_requests: Dict[str, list] = defaultdict(list)
+        # Upload için ayrı storage
+        self.upload_minute_requests: Dict[str, list] = defaultdict(list)
     
     def _get_client_ip(self, request: Request) -> str:
         """İstemci IP adresini al"""
@@ -122,11 +134,26 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.hour_requests[ip] = [
             t for t in self.hour_requests[ip] if t > hour_ago
         ]
+        # Upload storage temizliği
+        self.upload_minute_requests[ip] = [
+            t for t in self.upload_minute_requests[ip] if t > minute_ago
+        ]
     
-    def _is_rate_limited(self, ip: str) -> tuple[bool, Optional[str]]:
+    def _is_upload_endpoint(self, path: str) -> bool:
+        """Upload endpoint'i mi kontrol et"""
+        return any(path.startswith(ep) for ep in self.UPLOAD_ENDPOINTS)
+    
+    def _is_rate_limited(self, ip: str, is_upload: bool = False) -> tuple[bool, Optional[str]]:
         """Rate limit kontrolü yap"""
         now = time.time()
         self._cleanup_old_requests(ip, now)
+        
+        if is_upload:
+            # Upload endpoint'leri için ayrı limit
+            if len(self.upload_minute_requests[ip]) >= self.upload_requests_per_minute:
+                return True, f"Upload limiti aşıldı (dakikada {self.upload_requests_per_minute})"
+            self.upload_minute_requests[ip].append(now)
+            return False, None
         
         # Dakikalık limit kontrolü
         if len(self.minute_requests[ip]) >= self.requests_per_minute:
@@ -148,12 +175,16 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         
         client_ip = self._get_client_ip(request)
-        is_limited, message = self._is_rate_limited(client_ip)
+        
+        # Upload endpoint'i mi kontrol et
+        is_upload = self._is_upload_endpoint(request.url.path)
+        is_limited, message = self._is_rate_limited(client_ip, is_upload)
         
         if is_limited:
             security_logger.warning(
-                f"Rate limit aşıldı - IP: {client_ip}, Path: {request.url.path}"
+                f"Rate limit aşıldı - IP: {client_ip}, Path: {request.url.path}, Upload: {is_upload}"
             )
+            limit_value = self.upload_requests_per_minute if is_upload else self.requests_per_minute
             return JSONResponse(
                 status_code=429,
                 content={
@@ -162,7 +193,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 },
                 headers={
                     "Retry-After": "60",
-                    "X-RateLimit-Limit": str(self.requests_per_minute),
+                    "X-RateLimit-Limit": str(limit_value),
                     "X-RateLimit-Remaining": "0"
                 }
             )

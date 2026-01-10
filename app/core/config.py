@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     
+    # ==================== PASSWORD PEPPER ====================
+    # Şifre hash'lerine eklenen gizli değer (veritabanı sızıntısına karşı ekstra koruma)
+    # ⚠️ Bu değer değiştirilirse TÜM kullanıcı şifreleri geçersiz olur!
+    PASSWORD_PEPPER: str = ""  # .env'den okunacak, boşsa kullanılmaz
+    
     # ==================== DOWNLOAD LİNK GÜVENLİĞİ ====================
     DOWNLOAD_LINK_SECRET: str
     DOWNLOAD_LINK_EXPIRE_DAYS: int = 30
@@ -37,10 +42,20 @@ class Settings(BaseSettings):
     RATE_LIMIT_PER_MINUTE: int = 60
     DOWNLOAD_RATE_LIMIT_PER_MINUTE: int = 10
     DOWNLOAD_RATE_LIMIT_PER_HOUR: int = 50
+    UPLOAD_RATE_LIMIT_PER_MINUTE: int = 200  # Upload işlemleri için yüksek limit
     
     # İndirme limitleri (yeni)
     DOWNLOAD_IP_LIMIT_PER_MINUTE: int = 3  # IP başına dakikada maksimum istek
     DOWNLOAD_TRACKING_LIMIT_PER_DAY: int = 6  # Tracking ID başına günde maksimum istek
+    
+    # ==================== SMTP RATE LIMIT KORUMASI ====================
+    # Mail gönderiminde rate limit hatası almamak için bekleme süreleri
+    MAIL_DELAY_SECONDS: int = 3  # Her mail arası bekleme (saniye) - Varsayılan 3 saniye
+    MAIL_RETRY_MAX_ATTEMPTS: int = 3  # Rate limit hatası alındığında maksimum tekrar deneme
+    MAIL_RETRY_BASE_DELAY: int = 60  # İlk retry için bekleme süresi (saniye) - Sonraki denemeler katlanarak artar
+    MAIL_RATE_LIMIT_DELAY: int = 60  # Rate limit (450) hatası alındığında bekleme süresi
+    MAIL_BATCH_SIZE: int = 10  # Batch başına maksimum mail sayısı (ileride batch gönderim için)
+    MAIL_BATCH_DELAY: int = 30  # Batch'ler arası bekleme süresi (saniye)
     
     # ==================== BRUTE FORCE KORUMASI ====================
     LOGIN_MAX_ATTEMPTS: int = 5
@@ -48,6 +63,10 @@ class Settings(BaseSettings):
     
     # ==================== GÜVENLİK BAŞLIKLARI ====================
     SECURITY_HEADERS: bool = True
+    
+    # ==================== GÜVENLİK UYARILARI ====================
+    # Email bildirimleri şirket SMTP ayarları ile gönderilir
+    # Admin kullanıcılara otomatik bildirim yapılır
     
     # ==================== CORS AYARLARI ====================
     # Virgülle ayırarak birden fazla origin yazılabilir

@@ -18,6 +18,9 @@ from app.core.security_middleware import (
     RateLimitMiddleware,
     RequestLoggingMiddleware
 )
+from app.core.request_id_middleware import RequestIDMiddleware
+from app.core.https_enforcement import HTTPSEnforcementMiddleware, get_secure_cors_origins
+from app.core.csp_nonce import CSPNonceMiddleware  # Yeni: CSP Nonce
 from app.core.redis_service import init_redis, close_redis
 from app.api.v1 import api_router
 from app.models import Company, User, UserRole
@@ -151,26 +154,43 @@ app = FastAPI(
 )
 
 # Güvenlik Middleware'leri (sıra önemli!)
-# 1. Request Logging (en dışta)
+# 1. Request ID (en dışta - tüm isteklere ID atar)
+app.add_middleware(RequestIDMiddleware)
+
+# 2. CSP Nonce (XSS koruması için)
+app.add_middleware(CSPNonceMiddleware, enable_nonce=True)
+
+# 3. Request Logging
 app.add_middleware(RequestLoggingMiddleware)
 
-# 2. Security Headers
+# 4. HTTPS Enforcement (Production'da HTTP'yi reddeder)
+if not settings.DEBUG:
+    app.add_middleware(
+        HTTPSEnforcementMiddleware,
+        redirect_to_https=True,
+        exclude_paths=["/health", "/", "/favicon.ico"]
+    )
+
+# 5. Security Headers
 app.add_middleware(SecurityHeadersMiddleware)
 
-# 3. Rate Limiting
+# 6. Rate Limiting
 app.add_middleware(
     RateLimitMiddleware,
     requests_per_minute=settings.RATE_LIMIT_PER_MINUTE,
-    requests_per_hour=1000
+    requests_per_hour=1000,
+    upload_requests_per_minute=settings.UPLOAD_RATE_LIMIT_PER_MINUTE  # Upload için yüksek limit
 )
 
-# 4. CORS (en içte)
+# 7. CORS (en içte) - Güvenli origin'ler ile
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins_list,
+    allow_origins=get_secure_cors_origins(),  # HTTPS-only origin'ler
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # Sadece gerekli metodlar
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID", "X-Correlation-ID", "X-CSP-Nonce"],  # CSP Nonce eklendi
+    expose_headers=["X-Request-ID", "X-Correlation-ID", "X-Process-Time", "X-CSP-Nonce"],  # CSP Nonce eklendi
+    max_age=600,  # Preflight cache süresi (10 dakika)
 )
 
 # API Router

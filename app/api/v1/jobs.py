@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
+from app.core.config import settings
 from app.models import User, Employee, Payslip, PayslipStatus, Company, TrackingEvent, EventType
 from app.schemas import (
     PayslipSendRequest,
@@ -201,9 +202,17 @@ async def process_mail_job(
                         }
                     )
                     
-                    # Spam koruması için bekleme
-                    if len(payslips) > 1 and company.mail_delay_seconds > 0:
-                        await asyncio.sleep(company.mail_delay_seconds)
+                    # SMTP rate limit koruması için dinamik bekleme
+                    if len(payslips) > 1:
+                        # Rate limit hatası alındıysa daha uzun bekle (ENV'den al)
+                        if not success and ("450" in message or "Too many" in message):
+                            # Rate limit - ENV'den belirlenen süre kadar bekle
+                            await asyncio.sleep(settings.MAIL_RATE_LIMIT_DELAY)
+                        else:
+                            # Normal bekleme - Önce şirket ayarı, yoksa ENV
+                            delay = company.mail_delay_seconds if company.mail_delay_seconds > 0 else settings.MAIL_DELAY_SECONDS
+                            if delay > 0:
+                                await asyncio.sleep(delay)
                 
                 await db.commit()
                 

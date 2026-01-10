@@ -12,6 +12,7 @@ from .payslip import Payslip, PayslipStatus
 from .tracking import TrackingEvent, EventType
 from .audit import AuditLog, AuditAction
 from .session import UserSession
+from .api_key import APIKey, APIKeyStatus, APIKeyScope
 
 __all__ = [
     "Base",
@@ -25,7 +26,10 @@ __all__ = [
     "EventType",
     "AuditLog",
     "AuditAction",
-    "UserSession"
+    "UserSession",
+    "APIKey",
+    "APIKeyStatus",
+    "APIKeyScope",
 ]
 
 

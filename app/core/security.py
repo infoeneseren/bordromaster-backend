@@ -2,7 +2,7 @@
 """
 Güvenlik Modülü
 - JWT Token oluşturma/doğrulama
-- Password hashing
+- Password hashing (Pepper desteği ile)
 - Token yönetimi
 - İmzalı Download URL
 """
@@ -10,6 +10,7 @@ Güvenlik Modülü
 import hmac
 import hashlib
 import secrets
+import logging
 from datetime import datetime, timedelta
 from typing import Optional, Union
 from jose import JWTError, jwt
@@ -18,6 +19,8 @@ from pydantic import BaseModel
 
 from .config import settings
 
+# Security logger
+security_logger = logging.getLogger("security")
 
 # Password hashing context
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -38,14 +41,93 @@ class Token(BaseModel):
     token_type: str = "bearer"
 
 
+# ==================== PASSWORD PEPPER ====================
+
+def _apply_pepper(password: str) -> str:
+    """
+    Şifreye pepper ekle
+    
+    Pepper nedir?
+    - Salt: Her kullanıcı için farklı, veritabanında saklanır
+    - Pepper: Tüm kullanıcılar için aynı, SADECE config'de saklanır
+    
+    Avantajı:
+    - Veritabanı sızdığında bile pepper olmadan şifreler kırılamaz
+    - Pepper'ı .env'de tutarak veritabanından ayrı korursunuz
+    
+    Args:
+        password: Orijinal şifre
+    
+    Returns:
+        Pepper eklenmiş şifre (hash'lenmek üzere)
+    """
+    pepper = getattr(settings, 'PASSWORD_PEPPER', '')
+    
+    if not pepper:
+        # Pepper tanımlı değilse direkt şifreyi döndür
+        return password
+    
+    # HMAC-SHA256 ile pepper'ı şifreye karıştır
+    # Bu sayede pepper değiştiğinde eski hash'ler çalışmaz
+    peppered = hmac.new(
+        pepper.encode('utf-8'),
+        password.encode('utf-8'),
+        hashlib.sha256
+    ).hexdigest()
+    
+    # Orijinal şifre + peppered hash kombinasyonu
+    # Bu sayede bcrypt'in uzunluk limiti aşılmaz (72 byte)
+    return f"{password[:32]}{peppered[:32]}"
+
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Şifreyi doğrula"""
-    return pwd_context.verify(plain_password, hashed_password)
+    """
+    Şifreyi doğrula (Pepper desteği ile + geriye dönük uyumluluk)
+    
+    Args:
+        plain_password: Kullanıcının girdiği düz şifre
+        hashed_password: Veritabanındaki hash
+    
+    Returns:
+        Şifre doğru mu
+    
+    Not:
+        Geriye dönük uyumluluk için önce pepper'sız, sonra pepper'lı dener.
+        Bu sayede eski şifreler de çalışmaya devam eder.
+    """
+    # 1. Önce pepper'sız dene (eski şifreler için)
+    try:
+        if pwd_context.verify(plain_password, hashed_password):
+            security_logger.info("PASSWORD_VERIFY | Legacy (no pepper) password matched")
+            return True
+    except Exception:
+        pass
+    
+    # 2. Pepper'lı dene (yeni şifreler için)
+    pepper = getattr(settings, 'PASSWORD_PEPPER', '')
+    if pepper:
+        peppered_password = _apply_pepper(plain_password)
+        try:
+            if pwd_context.verify(peppered_password, hashed_password):
+                return True
+        except Exception:
+            pass
+    
+    return False
 
 
 def get_password_hash(password: str) -> str:
-    """Şifreyi hashle"""
-    return pwd_context.hash(password)
+    """
+    Şifreyi hashle (Pepper desteği ile)
+    
+    Args:
+        password: Hash'lenecek düz şifre
+    
+    Returns:
+        bcrypt hash
+    """
+    peppered_password = _apply_pepper(password)
+    return pwd_context.hash(peppered_password)
 
 
 def create_access_token(

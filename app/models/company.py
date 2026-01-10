@@ -59,6 +59,7 @@ class Company(Base):
     users = relationship("User", back_populates="company", lazy="selectin")
     employees = relationship("Employee", back_populates="company", lazy="selectin")
     payslips = relationship("Payslip", back_populates="company", lazy="selectin")
+    api_keys = relationship("APIKey", back_populates="company", lazy="selectin")
     
     def __repr__(self):
         return f"<Company(id={self.id}, name={self.name})>"

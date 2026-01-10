@@ -356,6 +356,12 @@ class RedisBruteForceProtection:
                 security_logger.critical(
                     f"IP_LOCKED | IP: {ip} | Attempts: {ip_count}"
                 )
+                # Security Alert gönder
+                try:
+                    from app.services.security_alerting import security_alerting
+                    await security_alerting.alert_brute_force(ip, email, ip_count)
+                except Exception:
+                    pass
             
             # Limit aşımı kontrolü - Email
             if email and email_count >= self.max_attempts:
@@ -364,6 +370,12 @@ class RedisBruteForceProtection:
                 security_logger.critical(
                     f"ACCOUNT_LOCKED | Email: {email[:3]}*** | Attempts: {email_count}"
                 )
+                # Security Alert gönder
+                try:
+                    from app.services.security_alerting import security_alerting
+                    await security_alerting.alert_account_locked(ip, email, self.lockout_minutes)
+                except Exception:
+                    pass
                 
         except Exception as e:
             security_logger.error(f"Brute force kayıt hatası: {e}")

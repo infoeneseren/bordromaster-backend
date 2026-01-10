@@ -196,7 +196,19 @@ async def change_password(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Şifre değiştir"""
+    """
+    Şifre değiştir
+    
+    Güvenlik Özellikleri:
+    - Mevcut şifre doğrulama
+    - Güçlü şifre politikası kontrolü
+    - Şifre değişikliği sonrası TÜM oturumlar sonlandırılır (mevcut hariç)
+    - Audit log kaydı
+    """
+    from app.services.session_service import session_service
+    from app.core.redis_service import token_blacklist
+    from app.core.security import decode_token
+    
     # Mevcut şifreyi kontrol et
     if not verify_password(password_data.current_password, current_user.password_hash):
         raise HTTPException(
@@ -234,6 +246,21 @@ async def change_password(
     # Yeni şifreyi kaydet
     current_user.password_hash = get_password_hash(password_data.new_password)
     
+    # Mevcut token'ı al (bu oturumu korumak için)
+    auth_header = request.headers.get("Authorization", "")
+    current_token = None
+    if auth_header.startswith("Bearer "):
+        current_token = auth_header[7:]
+    
+    # ========== GÜVENLİK: TÜM DİĞER OTURUMLARI SONLANDIR ==========
+    # Şifre değişikliği sonrası güvenlik için tüm oturumlar sonlandırılır
+    terminated_count = await session_service.terminate_all_sessions(
+        db=db,
+        user_id=current_user.id,
+        except_current=True,
+        current_token=current_user.refresh_token  # Mevcut oturumu koru
+    )
+    
     # Audit log
     await audit_service.log(
         db=db,
@@ -243,13 +270,21 @@ async def change_password(
         company_id=current_user.company_id,
         resource_type="user",
         resource_id=current_user.id,
+        details={
+            "terminated_sessions": terminated_count,
+            "reason": "password_change"
+        },
         ip_address=get_client_ip(request),
         user_agent=get_user_agent(request),
     )
     
     await db.commit()
     
-    return {"message": "Şifre başarıyla değiştirildi"}
+    return {
+        "message": "Şifre başarıyla değiştirildi",
+        "terminated_sessions": terminated_count,
+        "security_note": f"Güvenliğiniz için {terminated_count} diğer oturum sonlandırıldı."
+    }
 
 
 

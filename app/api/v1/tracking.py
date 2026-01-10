@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from collections import defaultdict
 import time
+from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from fastapi.responses import Response, FileResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -214,8 +215,36 @@ async def track_download(
         raise HTTPException(status_code=404, detail="Bordro bulunamadi")
     
     # 5. PATH TRAVERSAL KORUMASI
-    safe_path = sanitize_path(payslip.pdf_path, settings.PDF_OUTPUT_DIR)
+    pdf_path = payslip.pdf_path
+    
+    # Debug: Path bilgilerini logla
+    security_logger.info(
+        f"DOWNLOAD_DEBUG | tracking_id={tracking_id} | "
+        f"pdf_path={pdf_path} | base_dir={settings.PDF_OUTPUT_DIR}"
+    )
+    
+    # PDF path'ini düzelt (eski kayıtlar için uyumluluk)
+    # Eğer path base_dir ile başlamıyorsa, sadece filename'i al ve base_dir ile birleştir
+    if pdf_path and not pdf_path.startswith(settings.PDF_OUTPUT_DIR):
+        # Path'ten company_id, period ve filename'i çıkar
+        # Örnek: /old/path/1/2024-01/file.pdf -> /app/uploads/pdfs/1/2024-01/file.pdf
+        path_parts = pdf_path.replace('\\', '/').split('/')
+        # Son 3 parçayı al (company_id/period/filename)
+        if len(path_parts) >= 3:
+            relative_path = '/'.join(path_parts[-3:])
+            pdf_path = os.path.join(settings.PDF_OUTPUT_DIR, relative_path)
+            security_logger.info(f"PATH_CORRECTED | original={payslip.pdf_path} | corrected={pdf_path}")
+    
+    safe_path = sanitize_path(pdf_path, settings.PDF_OUTPUT_DIR)
+    
     if safe_path is None:
+        # Detaylı hata logu
+        security_logger.error(
+            f"DOWNLOAD_PATH_ERROR | tracking_id={tracking_id} | "
+            f"pdf_path={payslip.pdf_path} | corrected_path={pdf_path} | "
+            f"base_dir={settings.PDF_OUTPUT_DIR} | "
+            f"pdf_exists={os.path.exists(pdf_path) if pdf_path else False}"
+        )
         log_security_event(
             "PATH_TRAVERSAL_BLOCKED", 
             client_ip, 
@@ -225,6 +254,10 @@ async def track_download(
         raise HTTPException(status_code=403, detail="Dosyaya erişim reddedildi")
     
     if not os.path.exists(safe_path):
+        security_logger.error(
+            f"DOWNLOAD_FILE_NOT_FOUND | tracking_id={tracking_id} | "
+            f"safe_path={safe_path} | original_path={payslip.pdf_path}"
+        )
         raise HTTPException(status_code=404, detail="PDF dosyasi bulunamadi")
     
     # 6. Tracking event ekle
@@ -257,18 +290,35 @@ async def track_download(
     else:
         filename = f"Bordro_{payslip.period}.pdf"
     
+    # Türkçe karakterleri ASCII'ye çevir (mobil uyumluluk için)
+    tr_map = str.maketrans({
+        'ı': 'i', 'İ': 'I', 'ğ': 'g', 'Ğ': 'G',
+        'ü': 'u', 'Ü': 'U', 'ş': 's', 'Ş': 'S',
+        'ö': 'o', 'Ö': 'O', 'ç': 'c', 'Ç': 'C'
+    })
+    ascii_filename = filename.translate(tr_map)
+    # Sadece alfanumerik, alt çizgi, tire ve nokta karakterlere izin ver
+    safe_filename = ''.join(c if c.isalnum() or c in '._-' else '_' for c in ascii_filename)
+    
+    # RFC 5987 uyumlu encoding (mobil cihazlar için)
+    encoded_filename = quote(filename)
+    
     # Güvenlik başarılı log
-    log_security_event("DOWNLOAD_SUCCESS", client_ip, tracking_id, f"File: {filename}")
+    log_security_event("DOWNLOAD_SUCCESS", client_ip, tracking_id, f"File: {safe_filename}")
     
     return FileResponse(
-        safe_path,  # Sanitize edilmiş path kullan
+        safe_path,
         media_type="application/pdf",
-        filename=filename,
+        filename=safe_filename,
         headers={
             "X-Content-Type-Options": "nosniff",
-            "Content-Disposition": f"attachment; filename=\"{filename}\"",
+            # RFC 5987 formatı - tüm cihazlarda çalışır
+            "Content-Disposition": f"attachment; filename=\"{safe_filename}\"; filename*=UTF-8''{encoded_filename}",
             "X-Frame-Options": "DENY",
-            "X-XSS-Protection": "1; mode=block"
+            "X-XSS-Protection": "1; mode=block",
+            # Mobil cihazlar için ek header'lar
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "private, no-cache, no-store, must-revalidate"
         }
     )
 
