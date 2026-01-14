@@ -64,3 +64,4 @@ class UserSession(Base):
         """Oturum süresi dolmuş mu"""
         return datetime.utcnow() > self.expires_at
 
+

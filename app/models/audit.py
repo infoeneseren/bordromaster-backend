@@ -100,3 +100,4 @@ class AuditLog(Base):
     def __repr__(self):
         return f"<AuditLog {self.id}: {self.action.value} by {self.user_email}>"
 
+

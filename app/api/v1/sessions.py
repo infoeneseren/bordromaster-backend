@@ -158,3 +158,4 @@ async def get_session_count(
     )
     return {"active_sessions": count}
 
+

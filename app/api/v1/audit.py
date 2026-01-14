@@ -144,8 +144,9 @@ async def get_audit_summary(
     
     Son N günlük aktivite özeti
     """
-    from sqlalchemy import select, func
+    from sqlalchemy import select, func, desc
     from app.models import AuditLog
+    from app.models.audit import AuditAction
     
     start_date = datetime.utcnow() - timedelta(days=days)
     
@@ -198,14 +199,37 @@ async def get_audit_summary(
     )
     active_users = result.scalar() or 0
     
-    # Frontend için uyumlu response
+    # Son 24 saatteki başarısız giriş denemeleri
+    last_24h = datetime.utcnow() - timedelta(hours=24)
+    result = await db.execute(
+        select(AuditLog)
+        .where(
+            AuditLog.company_id == current_user.company_id,
+            AuditLog.action == AuditAction.LOGIN_FAILED,
+            AuditLog.created_at >= last_24h
+        )
+        .order_by(desc(AuditLog.created_at))
+        .limit(10)
+    )
+    failed_logins = result.scalars().all()
+    recent_failed_logins = [
+        {
+            "user_email": log.user_email,
+            "ip_address": log.ip_address,
+            "timestamp": log.created_at.isoformat() if log.created_at else None,
+        }
+        for log in failed_logins
+    ]
+    
+    # Frontend için uyumlu response (action.value = "login", "login_failed" vs.)
     return {
         "days": days,
         "total_actions": total,
-        "login_success": action_counts.get("LOGIN", 0),
-        "login_failed": action_counts.get("LOGIN_FAILED", 0),
+        "login_success": action_counts.get("login", 0),
+        "login_failed": action_counts.get("login_failed", 0),
         "active_users": active_users,
         "action_counts": action_counts,
         "daily_counts": daily_counts,
+        "recent_failed_logins": recent_failed_logins,
     }
 
